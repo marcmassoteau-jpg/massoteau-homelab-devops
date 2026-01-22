@@ -1,0 +1,23 @@
+---
+# Network configuration
+network_gateway: 192.168.1.1
+network_dns_servers:
+  - 192.168.1.1
+  - 8.8.8.8
+network_search_domain: localdomain
+
+# Cluster nodes
+cluster_nodes:
+  - { name: k8s-master, ip: 192.168.1.240, role: master }
+  - { name: k8s-worker-01, ip: 192.168.1.241, role: worker }
+  - { name: k8s-worker-02, ip: 192.168.1.242, role: worker }
+  - { name: k8s-worker-03, ip: 192.168.1.243, role: worker }
+  - { name: k8s-worker-04, ip: 192.168.1.244, role: worker }
+
+# Firewall configuration
+firewall_allowed_cluster_ips:
+  - 192.168.1.240
+  - 192.168.1.241
+  - 192.168.1.242
+  - 192.168.1.243
+  - 192.168.1.244

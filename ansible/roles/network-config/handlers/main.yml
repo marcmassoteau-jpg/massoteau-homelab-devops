@@ -1,0 +1,7 @@
+---
+# Handlers for network-config role
+
+- name: Regenerate /etc/hosts
+  ansible.builtin.command: /bin/true
+  changed_when: true
+  become: true

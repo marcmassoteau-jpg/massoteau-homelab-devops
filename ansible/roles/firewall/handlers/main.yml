@@ -1,0 +1,8 @@
+---
+# Handlers for firewall role
+
+- name: Reload UFW
+  ansible.builtin.systemd:
+    name: ufw
+    state: reloaded
+  become: true

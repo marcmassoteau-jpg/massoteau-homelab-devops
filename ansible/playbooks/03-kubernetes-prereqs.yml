@@ -1,0 +1,23 @@
+---
+# Playbook: Kubernetes Prerequisites
+# Purpose: Install and configure prerequisites for Kubernetes
+# - Common system configuration
+# - Container runtime (containerd)
+# - Kubernetes packages
+
+- name: Install Kubernetes prerequisites
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Apply common system configuration
+      ansible.builtin.include_role:
+        name: common
+
+    - name: Placeholder - Install containerd
+      ansible.builtin.debug:
+        msg: "Containerd installation will be implemented in upcoming articles"
+
+    # TODO: Implement containerd role
+    # TODO: Install Kubernetes packages (kubeadm, kubelet, kubectl)

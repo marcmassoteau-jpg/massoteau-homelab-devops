@@ -1,0 +1,20 @@
+---
+# Playbook: Security Hardening
+# Purpose: Prepare for Article 4 - Security hardening tasks
+# This playbook will be expanded in Article 4
+
+- name: Security hardening for Kubernetes cluster
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Placeholder - Security hardening role
+      ansible.builtin.debug:
+        msg: "Security hardening role will be implemented in Article 4"
+
+    # TODO: Implement security-hardening role
+    # - SSH hardening
+    # - Fail2ban installation
+    # - Audit logging
+    # - Sudo configuration

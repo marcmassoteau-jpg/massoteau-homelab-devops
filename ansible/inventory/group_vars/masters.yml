@@ -1,0 +1,7 @@
+---
+# Master node specific configuration
+node_role: master
+
+# Kubernetes control plane configuration
+k8s_control_plane: true
+k8s_pod_network_cidr: "10.244.0.0/16"

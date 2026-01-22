@@ -1,0 +1,50 @@
+---
+# Network configuration role - Automates Article 3 network setup
+# This role configures /etc/hosts with cloud-init persistence
+
+- name: Update /etc/cloud/templates/hosts.debian.tmpl for cloud-init persistence
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/cloud/templates/hosts.debian.tmpl
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: Regenerate /etc/hosts
+
+- name: Ensure /etc/hosts is updated from template
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  become: true
+
+- name: Ensure hostname persists across reboots
+  ansible.builtin.lineinfile:
+    path: /etc/hostname
+    line: "{{ inventory_hostname }}"
+    create: true
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Test hostname resolution for all cluster nodes
+  ansible.builtin.command: "getent hosts {{ item.name }}"
+  loop: "{{ cluster_nodes }}"
+  register: hostname_resolution
+  changed_when: false
+  failed_when: hostname_resolution.rc != 0
+
+- name: Display hostname resolution results
+  ansible.builtin.debug:
+    msg: "✓ {{ item.item.name }} resolves to {{ item.item.ip }}"
+  loop: "{{ hostname_resolution.results }}"
+  when: item.rc == 0

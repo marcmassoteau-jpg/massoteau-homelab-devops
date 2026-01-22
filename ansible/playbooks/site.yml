@@ -1,0 +1,32 @@
+---
+# Main site playbook - Complete Kubernetes cluster setup
+# This orchestrates all setup steps in the correct order
+
+- name: Complete Kubernetes cluster setup
+  hosts: all
+  gather_facts: true
+
+  tasks:
+    - name: Display setup information
+      ansible.builtin.debug:
+        msg:
+          - "Starting complete Kubernetes cluster setup"
+          - "Total nodes: {{ groups['k8s_cluster'] | length }}"
+          - "Master nodes: {{ groups['masters'] | length }}"
+          - "Worker nodes: {{ groups['workers'] | length }}"
+      run_once: true
+
+- name: Step 1 - Network configuration
+  ansible.builtin.import_playbook: 01-network-setup.yml
+
+- name: Step 2 - Security hardening
+  ansible.builtin.import_playbook: 02-security-hardening.yml
+
+- name: Step 3 - Kubernetes prerequisites
+  ansible.builtin.import_playbook: 03-kubernetes-prereqs.yml
+
+- name: Step 4 - Install Kubernetes
+  ansible.builtin.import_playbook: 04-install-kubernetes.yml
+
+- name: Step 5 - Verify cluster
+  ansible.builtin.import_playbook: 99-verify-cluster.yml

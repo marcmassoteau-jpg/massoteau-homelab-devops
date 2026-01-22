@@ -1,0 +1,14 @@
+---
+# Handlers for common role
+
+- name: Restart cron
+  ansible.builtin.systemd:
+    name: cron
+    state: restarted
+  become: true
+
+- name: Restart journald
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
+  become: true

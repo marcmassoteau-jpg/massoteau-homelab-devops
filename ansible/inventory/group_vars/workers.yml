@@ -1,0 +1,6 @@
+---
+# Worker node specific configuration
+node_role: worker
+
+# Kubernetes worker configuration
+k8s_control_plane: false

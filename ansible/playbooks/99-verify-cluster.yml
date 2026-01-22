@@ -1,0 +1,21 @@
+---
+# Playbook: Verify Kubernetes Cluster
+# Purpose: Verify cluster health and configuration
+# - Check node status
+# - Verify pod network
+# - Test cluster functionality
+
+- name: Verify Kubernetes cluster
+  hosts: masters
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Placeholder - Cluster verification
+      ansible.builtin.debug:
+        msg: "Cluster verification will be implemented in upcoming articles"
+
+    # TODO: Check kubectl get nodes
+    # TODO: Verify all nodes are Ready
+    # TODO: Check system pods are running
+    # TODO: Test pod-to-pod communication

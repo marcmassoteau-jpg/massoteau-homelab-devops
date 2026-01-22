@@ -1,0 +1,37 @@
+---
+# Default variables for common role
+
+# Whether to upgrade packages
+common_upgrade_packages: true
+
+# Essential packages to install
+common_essential_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - software-properties-common
+  - vim
+  - wget
+  - git
+  - htop
+  - net-tools
+  - dnsutils
+  - iputils-ping
+  - traceroute
+  - tcpdump
+
+# Timezone configuration
+common_timezone: UTC
+
+# Journald configuration
+common_journald_max_use: 500M
+
+# Whether to disable swap (required for Kubernetes)
+common_disable_swap: true
+
+# Kernel modules required for Kubernetes
+common_kernel_modules:
+  - overlay
+  - br_netfilter

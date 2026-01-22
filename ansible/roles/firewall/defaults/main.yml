@@ -1,0 +1,14 @@
+---
+# Default variables for firewall role
+
+# Whether to reset firewall to defaults before configuration
+firewall_reset: false
+
+# Allowed cluster IPs (should be overridden in group_vars)
+firewall_allowed_cluster_ips: []
+
+# SSH port
+firewall_ssh_port: 22
+
+# Whether this is a Kubernetes control plane node
+k8s_control_plane: false

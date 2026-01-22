@@ -1,0 +1,65 @@
+---
+# Firewall configuration role - Automates UFW setup for Kubernetes cluster
+# Based on Article 3 firewall configuration
+
+- name: Install UFW firewall
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+    update_cache: true
+  become: true
+
+- name: Reset UFW to defaults (idempotent initial state)
+  community.general.ufw:
+    state: reset
+  become: true
+  when: firewall_reset | default(false)
+
+- name: Set UFW default policies
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: 'incoming', policy: 'deny' }
+    - { direction: 'outgoing', policy: 'allow' }
+  become: true
+
+- name: Allow SSH access
+  community.general.ufw:
+    rule: allow
+    port: '22'
+    proto: tcp
+    comment: 'Allow SSH'
+  become: true
+
+- name: Allow traffic from Kubernetes cluster nodes
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ item }}"
+    comment: "Allow from Kubernetes node {{ item }}"
+  loop: "{{ firewall_allowed_cluster_ips }}"
+  become: true
+
+- name: Allow Kubernetes API server (master only)
+  community.general.ufw:
+    rule: allow
+    port: '6443'
+    proto: tcp
+    comment: 'Kubernetes API server'
+  become: true
+  when: k8s_control_plane | default(false)
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+  become: true
+
+- name: Get UFW status
+  ansible.builtin.command: ufw status verbose
+  register: ufw_status
+  changed_when: false
+  become: true
+
+- name: Display firewall status
+  ansible.builtin.debug:
+    var: ufw_status.stdout_lines

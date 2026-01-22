@@ -1,0 +1,17 @@
+[masters]
+k8s-master ansible_host=192.168.1.240
+
+[workers]
+k8s-worker-01 ansible_host=192.168.1.241
+k8s-worker-02 ansible_host=192.168.1.242
+k8s-worker-03 ansible_host=192.168.1.243
+k8s-worker-04 ansible_host=192.168.1.244
+
+[k8s_cluster:children]
+masters
+workers
+
+[k8s_cluster:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=~/.ssh/proxmox_key
+ansible_python_interpreter=/usr/bin/python3

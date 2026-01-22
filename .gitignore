@@ -1,0 +1,63 @@
+# Secrets and sensitive files
+*.tfvars
+!*.tfvars.example
+**/*secret*
+**/*password*
+**/*key*.pem
+**/*key*.pub
+.ssh/
+credentials/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Ansible
+*.retry
+ansible.log
+*vault*password*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Article files and project documentation (not for GitHub)
+Article-*.md
+article-*.md
+*-article-*.md
+/PROJECT-SUMMARY.md
+/EXECUTION-CONTEXT-GUIDE.md
+/GETTING-STARTED.md
+/CLARITY-UPDATE-SUMMARY.md
+/AUTOSCALING-UPDATE.md
+/PROXMOX_SCRIPTS_README.md
+/architecture-diagram.mermaid
+
+# Article assets
+screenshots/
+
+# Old demo files (capital K at root only)
+/Kubernetes/
+
+# Claude Code artifacts
+.claude/
+
+# Actual inventory and variable files (use .example templates)
+ansible/inventory/hosts.ini
+ansible/inventory/group_vars/all.yml

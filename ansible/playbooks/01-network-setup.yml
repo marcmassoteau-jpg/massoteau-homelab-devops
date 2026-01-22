@@ -1,0 +1,46 @@
+---
+# Playbook: Network Configuration for Kubernetes Cluster
+# Purpose: Automates the network setup validated in Article 3
+# - Configures /etc/hosts with cloud-init persistence
+# - Sets up UFW firewall rules
+# - Verifies network connectivity
+
+- name: Configure network for Kubernetes cluster
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Display node information
+      ansible.builtin.debug:
+        msg: "Configuring network for {{ inventory_hostname }} ({{ ansible_host }})"
+
+    - name: Apply network configuration role
+      ansible.builtin.include_role:
+        name: network-config
+
+    - name: Apply firewall configuration role
+      ansible.builtin.include_role:
+        name: firewall
+
+    - name: Verify connectivity between cluster nodes
+      ansible.builtin.ping:
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['k8s_cluster'] }}"
+      when: item != inventory_hostname
+
+    - name: Test DNS resolution for all nodes
+      ansible.builtin.command: "ping -c 1 {{ item }}"
+      loop: "{{ groups['k8s_cluster'] }}"
+      register: ping_test
+      changed_when: false
+      failed_when: ping_test.rc != 0
+
+    - name: Display network configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "Network configuration completed successfully!"
+          - "Node: {{ inventory_hostname }}"
+          - "IP: {{ ansible_host }}"
+          - "Hostname resolution: ✓"
+          - "Firewall configured: ✓"

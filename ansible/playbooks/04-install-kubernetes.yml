@@ -1,0 +1,19 @@
+---
+# Playbook: Install Kubernetes
+# Purpose: Initialize Kubernetes cluster
+# - Initialize control plane on master
+# - Join worker nodes to cluster
+
+- name: Install Kubernetes cluster
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Placeholder - Kubernetes installation
+      ansible.builtin.debug:
+        msg: "Kubernetes installation will be implemented in upcoming articles"
+
+    # TODO: Initialize Kubernetes control plane
+    # TODO: Configure CNI (Flannel/Calico)
+    # TODO: Join worker nodes
