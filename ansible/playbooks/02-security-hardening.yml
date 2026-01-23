@@ -1,20 +1,37 @@
 ---
 # Playbook: Security Hardening
-# Purpose: Prepare for Article 4 - Security hardening tasks
-# This playbook will be expanded in Article 4
+# Purpose: Harden Ubuntu servers for Kubernetes cluster deployment
+# Article: 4 - Security Hardening and Prerequisites
 
 - name: Security hardening for Kubernetes cluster
   hosts: k8s_cluster
   become: true
   gather_facts: true
 
-  tasks:
-    - name: Placeholder - Security hardening role
-      ansible.builtin.debug:
-        msg: "Security hardening role will be implemented in Article 4"
+  roles:
+    - security-hardening
 
-    # TODO: Implement security-hardening role
-    # - SSH hardening
-    # - Fail2ban installation
-    # - Audit logging
-    # - Sudo configuration
+  post_tasks:
+    - name: Display security hardening summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Security hardening completed successfully!"
+          - "=========================================="
+          - ""
+          - "SSH Configuration:"
+          - "  Port: {{ security_ssh_port | default(22) }}"
+          - "  Root login: {{ 'disabled' if not (security_ssh_permit_root_login | default(false)) else 'enabled' }}"
+          - "  Password auth: {{ 'disabled' if not (security_ssh_password_authentication | default(false)) else 'enabled' }}"
+          - ""
+          - "Security Features:"
+          - "  fail2ban: {{ 'enabled' if (security_fail2ban_enabled | default(true)) else 'disabled' }}"
+          - "  Unattended upgrades: {{ 'enabled' if (security_unattended_upgrades | default(true)) else 'disabled' }}"
+          - "  Audit logging: {{ 'enabled' if (security_auditd_enabled | default(true)) else 'disabled' }}"
+          - ""
+          - "Next Steps:"
+          - "  1. Verify SSH access: ssh ubuntu@<node-ip>"
+          - "  2. Check fail2ban: sudo fail2ban-client status"
+          - "  3. Review audit logs: sudo ausearch -m avc"
+          - "  4. Proceed to Article 5: Kubernetes Installation"
+          - "=========================================="

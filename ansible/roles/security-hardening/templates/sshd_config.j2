@@ -1,0 +1,63 @@
+# SSH Server Configuration - Hardened for Kubernetes Cluster
+# Managed by Ansible - security-hardening role
+# DO NOT EDIT MANUALLY
+
+# Basic settings
+Port {{ security_ssh_port }}
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+
+# Protocol and ciphers
+Protocol 2
+
+# HostKeys
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Logging
+SyslogFacility AUTH
+LogLevel VERBOSE
+
+# Authentication
+PermitRootLogin {{ 'yes' if security_ssh_permit_root_login else 'prohibit-password' }}
+StrictModes yes
+MaxAuthTries 3
+MaxSessions 10
+
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+# Password authentication
+PasswordAuthentication {{ 'yes' if security_ssh_password_authentication else 'no' }}
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+
+# Kerberos and GSSAPI
+KerberosAuthentication no
+GSSAPIAuthentication no
+
+# Security settings
+X11Forwarding no
+PrintMotd no
+PrintLastLog yes
+TCPKeepAlive yes
+PermitUserEnvironment no
+Compression delayed
+ClientAliveInterval 300
+ClientAliveCountMax 2
+UseDNS no
+PermitTunnel no
+Banner none
+
+# Allow/Deny users
+{% if security_ssh_allow_users %}
+AllowUsers {{ security_ssh_allow_users | join(' ') }}
+{% endif %}
+
+# Subsystems
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+# Accept locale-related environment variables
+AcceptEnv LANG LC_*

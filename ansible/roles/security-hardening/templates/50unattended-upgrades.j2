@@ -1,0 +1,33 @@
+// Unattended Upgrades Configuration
+// Managed by Ansible - security-hardening role
+// DO NOT EDIT MANUALLY
+
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}";
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+
+// List of packages to not update
+Unattended-Upgrade::Package-Blacklist {
+};
+
+// Automatically reboot if required
+Unattended-Upgrade::Automatic-Reboot "{{ 'true' if security_auto_reboot else 'false' }}";
+
+// Reboot time
+Unattended-Upgrade::Automatic-Reboot-Time "{{ security_auto_reboot_time }}";
+
+// Remove unused dependencies
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+// Remove unused kernel packages
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+
+// Email notifications
+Unattended-Upgrade::Mail "root";
+Unattended-Upgrade::MailOnlyOnError "true";
+
+// Verbose logging
+Unattended-Upgrade::Verbose "false";

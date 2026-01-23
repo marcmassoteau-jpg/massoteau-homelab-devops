@@ -1,0 +1,66 @@
+# Ansible .gitignore
+# Protects sensitive files from being committed to Git
+
+# Inventory files (use templates instead)
+inventory/hosts.ini
+inventory/group_vars/all.yml
+inventory/group_vars/masters.yml
+inventory/group_vars/workers.yml
+inventory/host_vars/
+
+# Sensitive files
+inventory/group_vars/secrets.yml
+inventory/group_vars/*.vault*
+.vault-pass*
+vault-pass*
+*.vault
+
+# Ansible logs and temporary files
+ansible.log
+*.retry
+.ansible/
+facts.d/
+/tmp/ansible_facts
+*.pyc
+__pycache__/
+
+# SSH keys
+*.pem
+*.key
+*.pub
+*_rsa
+*_dsa
+.ssh/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing output
+test-output/
+debug/
+output/
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Local configuration overrides
+local.yml
+local_*.yml

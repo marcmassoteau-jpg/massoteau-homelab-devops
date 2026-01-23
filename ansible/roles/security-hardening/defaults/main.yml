@@ -1,0 +1,56 @@
+---
+# Security hardening role default variables
+
+# SSH configuration
+security_ssh_port: 22
+security_ssh_permit_root_login: false
+security_ssh_password_authentication: false
+security_ssh_allow_users: []  # Add specific users if needed, e.g., ["ubuntu"]
+
+# fail2ban configuration
+security_fail2ban_enabled: true
+security_fail2ban_bantime: 3600
+security_fail2ban_findtime: 600
+security_fail2ban_maxretry: 5
+security_fail2ban_destemail: "root@localhost"
+
+# Kernel security parameters
+security_kernel_params:
+  - { name: 'net.ipv4.conf.all.rp_filter', value: '1' }
+  - { name: 'net.ipv4.conf.default.rp_filter', value: '1' }
+  - { name: 'net.ipv4.icmp_echo_ignore_broadcasts', value: '1' }
+  - { name: 'net.ipv4.conf.all.accept_source_route', value: '0' }
+  - { name: 'net.ipv4.conf.default.accept_source_route', value: '0' }
+  - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+  - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+  - { name: 'net.ipv4.conf.all.secure_redirects', value: '0' }
+  - { name: 'net.ipv4.conf.default.secure_redirects', value: '0' }
+  - { name: 'net.ipv4.conf.all.log_martians', value: '1' }
+  - { name: 'net.ipv4.conf.default.log_martians', value: '1' }
+  - { name: 'net.ipv4.icmp_ignore_bogus_error_responses', value: '1' }
+  - { name: 'net.ipv4.tcp_syncookies', value: '1' }
+  - { name: 'kernel.randomize_va_space', value: '2' }
+
+# Automatic security updates
+security_unattended_upgrades: true
+security_auto_reboot: false
+security_auto_reboot_time: "03:00"
+
+# System resource limits
+security_limits:
+  - { domain: '*', type: 'soft', item: 'nofile', value: '65536' }
+  - { domain: '*', type: 'hard', item: 'nofile', value: '65536' }
+  - { domain: '*', type: 'soft', item: 'nproc', value: '32768' }
+  - { domain: '*', type: 'hard', item: 'nproc', value: '32768' }
+
+# Audit logging
+security_auditd_enabled: true
+
+# Additional security packages
+security_packages:
+  - fail2ban
+  - ufw
+  - aide
+  - auditd
+  - apparmor
+  - apparmor-utils

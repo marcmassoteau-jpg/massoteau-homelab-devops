@@ -1,0 +1,41 @@
+# Fail2Ban local configuration
+# Managed by Ansible - security-hardening role
+# DO NOT EDIT MANUALLY
+
+[DEFAULT]
+# Ban time in seconds
+bantime = {{ security_fail2ban_bantime }}
+
+# Time window for counting failures
+findtime = {{ security_fail2ban_findtime }}
+
+# Number of failures before ban
+maxretry = {{ security_fail2ban_maxretry }}
+
+# Destination email for alerts
+destemail = {{ security_fail2ban_destemail }}
+
+# Email sender
+sender = fail2ban@{{ ansible_hostname }}
+
+# Action to take when threshold is reached
+action = %(action_mwl)s
+
+# Backend to use for log monitoring
+backend = systemd
+
+[sshd]
+enabled = true
+port = {{ security_ssh_port }}
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = {{ security_fail2ban_maxretry }}
+bantime = {{ security_fail2ban_bantime }}
+
+[sshd-ddos]
+enabled = true
+port = {{ security_ssh_port }}
+filter = sshd-ddos
+logpath = /var/log/auth.log
+maxretry = 10
+bantime = {{ security_fail2ban_bantime }}
