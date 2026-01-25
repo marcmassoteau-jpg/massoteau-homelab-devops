@@ -1,0 +1,16 @@
+---
+# kubernetes role handlers
+
+- name: Restart kubelet
+  ansible.builtin.systemd:
+    name: kubelet
+    state: restarted
+    daemon_reload: true
+  listen: "Restart kubelet"
+  # Don't fail if kubelet can't start (it needs cluster init first)
+  failed_when: false
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: "Reload systemd"

@@ -1,0 +1,214 @@
+---
+# kubernetes role tasks
+
+# Pre-flight checks
+- name: Check if swap is disabled
+  ansible.builtin.command: swapon --show
+  register: swap_status
+  changed_when: false
+  failed_when: false
+  when: kubernetes_check_swap | default(true)
+  tags:
+    - kubernetes
+    - preflight
+
+- name: Fail if swap is enabled
+  ansible.builtin.fail:
+    msg: "Swap is enabled. Kubernetes requires swap to be disabled. Run common role first."
+  when:
+    - kubernetes_check_swap | default(true)
+    - swap_status.stdout | length > 0
+  tags:
+    - kubernetes
+    - preflight
+
+- name: Check if containerd is running
+  ansible.builtin.systemd:
+    name: containerd
+  register: containerd_status
+  when: kubernetes_check_containerd | default(true)
+  tags:
+    - kubernetes
+    - preflight
+
+- name: Fail if containerd is not active
+  ansible.builtin.fail:
+    msg: "containerd is not running. Run containerd role first."
+  when:
+    - kubernetes_check_containerd | default(true)
+    - containerd_status.status.ActiveState != "active"
+  tags:
+    - kubernetes
+    - preflight
+
+- name: Check if br_netfilter module is loaded
+  ansible.builtin.shell: lsmod | grep br_netfilter
+  register: br_netfilter_status
+  changed_when: false
+  failed_when: false
+  when: kubernetes_check_kernel_modules | default(true)
+  tags:
+    - kubernetes
+    - preflight
+
+- name: Check if overlay module is loaded
+  ansible.builtin.shell: lsmod | grep overlay
+  register: overlay_status
+  changed_when: false
+  failed_when: false
+  when: kubernetes_check_kernel_modules | default(true)
+  tags:
+    - kubernetes
+    - preflight
+
+- name: Fail if required kernel modules are not loaded
+  ansible.builtin.fail:
+    msg: "Required kernel modules (br_netfilter, overlay) are not loaded. Run containerd role first."
+  when:
+    - kubernetes_check_kernel_modules | default(true)
+    - br_netfilter_status.rc != 0 or overlay_status.rc != 0
+  tags:
+    - kubernetes
+    - preflight
+
+# Package installation
+- name: Install prerequisite packages for Kubernetes repository
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+    update_cache: true
+  tags:
+    - kubernetes
+    - packages
+
+- name: Create keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  tags:
+    - kubernetes
+    - repository
+
+- name: Remove existing Kubernetes GPG key if present
+  ansible.builtin.file:
+    path: "{{ kubernetes_apt_keyring_path }}"
+    state: absent
+  tags:
+    - kubernetes
+    - repository
+
+- name: Download and convert Kubernetes GPG key
+  ansible.builtin.shell: |
+    curl -fsSL "{{ kubernetes_apt_key_url }}" | gpg --dearmor -o "{{ kubernetes_apt_keyring_path }}"
+  tags:
+    - kubernetes
+    - repository
+
+- name: Set correct permissions on GPG keyring
+  ansible.builtin.file:
+    path: "{{ kubernetes_apt_keyring_path }}"
+    mode: '0644'
+    owner: root
+    group: root
+  tags:
+    - kubernetes
+    - repository
+
+- name: Add Kubernetes APT repository
+  ansible.builtin.apt_repository:
+    repo: "{{ kubernetes_apt_repository }}"
+    state: present
+    filename: kubernetes
+    update_cache: true
+  tags:
+    - kubernetes
+    - repository
+
+- name: Install Kubernetes packages
+  ansible.builtin.apt:
+    name: "{{ item.name }}"
+    state: "{{ item.state }}"
+    update_cache: true
+  loop: "{{ kubernetes_packages }}"
+  tags:
+    - kubernetes
+    - packages
+
+- name: Hold Kubernetes packages (prevent automatic updates)
+  ansible.builtin.dpkg_selections:
+    name: "{{ item.name }}"
+    selection: hold
+  loop: "{{ kubernetes_packages }}"
+  when: kubernetes_pin_packages | default(true)
+  tags:
+    - kubernetes
+    - packages
+    - pin
+
+- name: Create kubelet configuration directory
+  ansible.builtin.file:
+    path: /etc/default
+    state: directory
+    mode: '0755'
+  tags:
+    - kubernetes
+    - config
+
+- name: Configure kubelet extra arguments
+  ansible.builtin.lineinfile:
+    path: "{{ kubernetes_kubelet_config_file }}"
+    line: 'KUBELET_EXTRA_ARGS="{{ kubernetes_kubelet_extra_args }}"'
+    create: true
+    mode: '0644'
+    owner: root
+    group: root
+  when: kubernetes_kubelet_extra_args | length > 0
+  notify: Restart kubelet
+  tags:
+    - kubernetes
+    - config
+
+- name: Enable kubelet service (will start after cluster init)
+  ansible.builtin.systemd:
+    name: kubelet
+    enabled: "{{ kubernetes_kubelet_enabled }}"
+    daemon_reload: true
+  tags:
+    - kubernetes
+    - service
+
+# Note: kubelet will crash-loop until cluster is initialized
+# This is expected behavior - don't fail on this
+- name: Check kubelet service status
+  ansible.builtin.systemd:
+    name: kubelet
+  register: kubelet_status
+  failed_when: false
+  changed_when: false
+  tags:
+    - kubernetes
+    - verify
+
+- name: Display Kubernetes installation summary
+  ansible.builtin.debug:
+    msg:
+      - "Kubernetes packages installation completed!"
+      - "Installed versions:"
+      - "  - kubeadm: {{ kubernetes_version }}"
+      - "  - kubelet: {{ kubernetes_version }}"
+      - "  - kubectl: {{ kubernetes_version }}"
+      - "Kubelet service: {{ kubelet_status.status.ActiveState | default('inactive - waiting for cluster init') }}"
+      - "Note: kubelet will start after cluster initialization (kubeadm init)"
+      - ""
+      - "Verify installation:"
+      - "  kubeadm version"
+      - "  kubectl version --client"
+      - "  kubelet --version"
+  tags:
+    - kubernetes
+    - verify

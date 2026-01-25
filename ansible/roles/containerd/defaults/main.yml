@@ -1,0 +1,43 @@
+---
+# containerd role default variables
+
+# containerd version (leave empty for latest from Ubuntu repos)
+containerd_version: ""
+
+# containerd configuration
+containerd_config_dir: "/etc/containerd"
+containerd_state_dir: "/var/lib/containerd"
+
+# Use systemd cgroup driver (required for Kubernetes)
+containerd_use_systemd_cgroup: true
+
+# Sandbox (pause) image for Kubernetes
+containerd_sandbox_image: "registry.k8s.io/pause:3.9"
+
+# Runtime configuration
+containerd_snapshotter: "overlayfs"
+containerd_runtime: "runc"
+
+# Enable metrics endpoint
+containerd_metrics_address: "127.0.0.1"
+containerd_metrics_port: 1338
+
+# Kernel modules required for containerd
+containerd_kernel_modules:
+  - overlay
+  - br_netfilter
+
+# Kernel parameters for Kubernetes networking
+containerd_kernel_params:
+  - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+  - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+  - { name: 'net.ipv4.ip_forward', value: '1' }
+
+# Additional packages required
+containerd_packages:
+  - containerd
+  - runc
+
+# Service configuration
+containerd_service_enabled: true
+containerd_service_state: started

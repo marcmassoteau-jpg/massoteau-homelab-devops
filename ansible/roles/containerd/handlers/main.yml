@@ -1,0 +1,14 @@
+---
+# containerd role handlers
+
+- name: Restart containerd
+  ansible.builtin.systemd:
+    name: containerd
+    state: restarted
+    daemon_reload: true
+  listen: "Restart containerd"
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: "Reload systemd"

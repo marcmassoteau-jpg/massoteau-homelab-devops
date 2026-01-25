@@ -15,9 +15,10 @@
       ansible.builtin.include_role:
         name: common
 
-    - name: Placeholder - Install containerd
-      ansible.builtin.debug:
-        msg: "Containerd installation will be implemented in upcoming articles"
+    - name: Install and configure containerd runtime
+      ansible.builtin.include_role:
+        name: containerd
 
-    # TODO: Implement containerd role
-    # TODO: Install Kubernetes packages (kubeadm, kubelet, kubectl)
+    - name: Install Kubernetes packages
+      ansible.builtin.include_role:
+        name: kubernetes

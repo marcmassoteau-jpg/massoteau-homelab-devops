@@ -57,19 +57,6 @@
   become: true
   when: common_disable_swap | default(true)
 
-- name: Enable IP forwarding for Kubernetes
-  ansible.posix.sysctl:
-    name: "{{ item.key }}"
-    value: "{{ item.value }}"
-    state: present
-    sysctl_set: true
-    reload: true
-  loop:
-    - { key: 'net.ipv4.ip_forward', value: '1' }
-    - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
-    - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
-  become: true
-
 - name: Load required kernel modules
   community.general.modprobe:
     name: "{{ item }}"
@@ -86,4 +73,17 @@
     group: root
     mode: '0644'
   loop: "{{ common_kernel_modules }}"
+  become: true
+
+- name: Enable IP forwarding for Kubernetes
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  loop:
+    - { key: 'net.ipv4.ip_forward', value: '1' }
+    - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+    - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
   become: true

@@ -1,0 +1,38 @@
+---
+# kubernetes role default variables
+
+# Kubernetes version to install
+kubernetes_version: "1.29"
+kubernetes_version_rhel_package: "1.29.1"
+
+# Kubernetes packages to install
+kubernetes_packages:
+  - name: kubelet
+    state: present
+  - name: kubectl
+    state: present
+  - name: kubeadm
+    state: present
+
+# Kubernetes APT repository configuration
+kubernetes_apt_repository_arch: "amd64"
+kubernetes_apt_repository: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /"
+kubernetes_apt_key_url: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key"
+kubernetes_apt_keyring_path: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+
+# Pin Kubernetes packages to prevent automatic updates
+kubernetes_pin_packages: true
+kubernetes_pin_priority: 1000
+
+# Kubelet configuration
+kubernetes_kubelet_extra_args: ""
+kubernetes_kubelet_config_file: "/etc/default/kubelet"
+
+# Service configuration
+kubernetes_kubelet_enabled: true
+kubernetes_kubelet_state: started
+
+# Pre-requisites check
+kubernetes_check_containerd: true
+kubernetes_check_swap: true
+kubernetes_check_kernel_modules: true

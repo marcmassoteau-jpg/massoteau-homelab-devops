@@ -1,0 +1,118 @@
+---
+# containerd role tasks
+
+- name: Load kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+    persistent: present
+  loop: "{{ containerd_kernel_modules }}"
+  tags:
+    - containerd
+    - kernel
+
+- name: Configure kernel modules to load at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/containerd.conf
+    content: |
+      # Kernel modules for containerd
+      # Managed by Ansible - containerd role
+      overlay
+      br_netfilter
+    mode: '0644'
+    owner: root
+    group: root
+  tags:
+    - containerd
+    - kernel
+
+- name: Configure kernel parameters for Kubernetes
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+    reload: true
+  loop: "{{ containerd_kernel_params }}"
+  tags:
+    - containerd
+    - kernel
+    - kubernetes
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  tags:
+    - containerd
+    - packages
+
+- name: Install containerd and dependencies
+  ansible.builtin.apt:
+    name: "{{ containerd_packages }}"
+    state: present
+  tags:
+    - containerd
+    - packages
+
+- name: Create containerd configuration directory
+  ansible.builtin.file:
+    path: "{{ containerd_config_dir }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags:
+    - containerd
+    - config
+
+- name: Generate default containerd configuration
+  ansible.builtin.shell: containerd config default
+  register: containerd_config_default
+  changed_when: false
+  tags:
+    - containerd
+    - config
+
+- name: Configure containerd with systemd cgroup driver
+  ansible.builtin.template:
+    src: config.toml.j2
+    dest: "{{ containerd_config_dir }}/config.toml"
+    mode: '0644'
+    owner: root
+    group: root
+  notify: Restart containerd
+  tags:
+    - containerd
+    - config
+
+- name: Ensure containerd service is enabled and started
+  ansible.builtin.systemd:
+    name: containerd
+    enabled: "{{ containerd_service_enabled }}"
+    state: "{{ containerd_service_state }}"
+    daemon_reload: true
+  tags:
+    - containerd
+    - service
+
+- name: Verify containerd is running
+  ansible.builtin.command: ctr version
+  register: containerd_version_output
+  changed_when: false
+  failed_when: containerd_version_output.rc != 0
+  tags:
+    - containerd
+    - verify
+
+- name: Display containerd status
+  ansible.builtin.debug:
+    msg:
+      - "containerd installation completed successfully!"
+      - "Version: {{ containerd_version_output.stdout_lines[0] | default('unknown') }}"
+      - "Systemd cgroup driver: {{ 'enabled' if containerd_use_systemd_cgroup else 'disabled' }}"
+      - "Sandbox image: {{ containerd_sandbox_image }}"
+      - "Status: Run 'sudo systemctl status containerd' to verify"
+  tags:
+    - containerd
+    - verify
