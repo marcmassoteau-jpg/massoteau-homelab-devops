@@ -8,45 +8,45 @@
 
 This repository contains **production-ready automation code** for deploying and managing a complete Kubernetes homelab environment. All code is tested and documented in the companion [Medium article series](https://medium.com/@marcmassoteau).
 
-## 📋 What's Included
+## What's Included
 
 - **Terraform Infrastructure**: Infrastructure as Code for Proxmox VM provisioning
-- **Ansible Playbooks**: Automated configuration management for Kubernetes nodes
+- **Ansible Playbooks**: Automated configuration management for Kubernetes nodes (10 playbooks)
 - **Integration Scripts**: One-command cluster deployment (Terraform + Ansible)
 - **GitLab Platform**: Self-hosted Git repository and container registry on Kubernetes
 - **Jenkins CI/CD**: Automated build, test, and deployment pipelines with shared libraries
-- **CI/CD Pipelines**: Automated build, test, and deployment workflows
-- **Pipeline Templates**: Reusable Jenkins shared libraries and GitLab CI templates for comparison
+- **Pipeline Templates**: Reusable Jenkins shared libraries and GitLab CI templates
 - **Deployment Strategies**: Blue-green and canary deployments with automated rollback
 - **GitOps with ArgoCD**: Declarative deployments with self-healing and drift detection
 - **GitOps Repository**: Kustomize-based multi-environment management (dev/staging/prod)
 - **Monitoring Stack**: Prometheus, Grafana dashboards, Loki log aggregation, and alerting
 - **Backup & Recovery**: Velero with MinIO, etcd snapshots, and multi-layer disaster recovery
 - **Cluster Autoscaling**: Dynamic worker node provisioning with Proxmox API integration
-- **Helper Scripts**: Proxmox VM management, network testing, and utilities
-- **Documentation**: Comprehensive guides, articles, and troubleshooting
-- **Examples**: Sample applications, Jenkins pipelines, and GitOps workflow demos
+- **Troubleshooting**: Diagnostic scripts, troubleshooting guides, and production readiness assessments
+- **Examples**: Sample applications, CI/CD pipelines, and GitOps workflow demos
 
-## 🏗️ Infrastructure Overview
+## Infrastructure Overview
 
 ```
-Proxmox Host
+Proxmox Host (192.168.1.222)
     └── Kubernetes Cluster (5 VMs)
         ├── k8s-master (192.168.1.240)
         │   └── 4 vCPU / 8GB RAM / 100GB Disk
         └── k8s-worker-01 to 04 (192.168.1.241-244)
             └── 4 vCPU / 16GB RAM / 200GB Disk each
 
-Services:
-    ├── gitlab.homelab.local - Source control & container registry
-    ├── jenkins.homelab.local - CI/CD automation
-    ├── argocd.homelab.local - GitOps deployment
-    ├── grafana.homelab.local - Metrics dashboards & log viewer
-    ├── prometheus.homelab.local - Metrics collection & alerting
-    └── alertmanager.homelab.local - Alert routing & notification
+Services (via Traefik on NodePort 30080):
+    ├── grafana.homelab.local     - Metrics dashboards & log viewer
+    ├── prometheus.homelab.local  - Metrics collection & alerting
+    ├── alertmanager.homelab.local - Alert routing & notification
+    ├── gitlab.homelab.local      - Source control & container registry
+    ├── jenkins.homelab.local     - CI/CD automation
+    ├── argocd.homelab.local      - GitOps deployment
+    ├── dashboard.homelab.local   - Kubernetes Dashboard
+    └── traefik.homelab.local     - Ingress controller dashboard
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -62,8 +62,6 @@ Services:
 - SSH key pair for passwordless authentication
 
 ### Quick Installation (Automated)
-
-**Option 1: One-Command Deployment** (Recommended)
 
 Deploy the complete cluster with a single script:
 
@@ -88,8 +86,6 @@ This script:
 3. Runs all Ansible playbooks sequentially
 4. Verifies cluster health
 5. Provides connection details
-
-**Total deployment time:** ~10-15 minutes
 
 ### Manual Installation
 
@@ -136,7 +132,7 @@ This script:
    ansible-playbook playbooks/10-deploy-cluster-autoscaler.yml
    ```
 
-## 📚 Documentation
+## Documentation
 
 ### Setup Guides
 
@@ -144,309 +140,173 @@ This script:
 - **[Terraform README](terraform/proxmox-vms/README.md)**: Proxmox VM provisioning guide
 - **[Getting Started](docs/setup-guides/getting-started.md)**: Complete setup guide
 - **[Ansible Playbooks](docs/setup-guides/ansible-playbooks.md)**: How to use playbooks
-- **[Ansible README](ansible/README.md)**: Ansible automation details
+
+### Architecture & Guides
+
+- **[GitOps Architecture](docs/architecture/gitops-architecture.md)**: GitOps deployment architecture
+- **[CI/CD vs GitOps](docs/comparisons/cicd-vs-gitops.md)**: Comparison and decision framework
+- **[Production Readiness](docs/checklists/production-readiness.md)**: Production readiness checklist
+- **[Security Audit](docs/checklists/security-audit.md)**: Security audit checklist
+
+### Troubleshooting
+
+- **[Networking Issues](docs/troubleshooting/networking-issues.md)**: DNS, pod connectivity, ingress
+- **[Storage Issues](docs/troubleshooting/storage-issues.md)**: PV/PVC troubleshooting
+- **[Certificate Issues](docs/troubleshooting/certificate-issues.md)**: TLS and kubeadm certs
+- **[Common Errors](docs/troubleshooting/common-errors.md)**: Frequent Kubernetes errors
+- **[Pod Scheduling](docs/troubleshooting/pod-scheduling.md)**: Scheduling failures
+- **[Performance Guide](docs/troubleshooting/performance-guide.md)**: Performance optimization
 
 ### Article Series
 
-**Phase 1-2: Foundation & Kubernetes (Articles 1-9)**
-- Articles 1-5: Proxmox, Network, Security, Kubernetes
+This project is documented in a 22-article [Medium series](https://medium.com/@marcmassoteau) covering:
 
-**Phase 3: Infrastructure as Code (Articles 10-12)** ✅
-- **[Article 10](docs/articles/Article-10-Terraform-Proxmox.md)**: Terraform Foundations (9,657 words)
-- **[Article 11](docs/articles/Article-11-Ansible-Configuration.md)**: Ansible Configuration Management (13,803 words)
-- **[Article 12](docs/articles/Article-12-Terraform-Ansible-Integration.md)**: Terraform + Ansible Integration (10,465 words)
+| Phase | Articles | Topics |
+|-------|----------|--------|
+| **1-2: Foundation** | 1-9 | Proxmox, networking, security, Kubernetes setup |
+| **3: IaC** | 10-12 | Terraform, Ansible, integration pipeline |
+| **4: CI/CD** | 13-14 | GitLab deployment, Jenkins pipelines |
+| **5: Advanced CI/CD** | 15-16 | Pipeline templates, deployment strategies |
+| **6: GitOps** | 17 | ArgoCD, Kustomize, multi-environment |
+| **7: Observability** | 18 | Prometheus, Grafana, Loki, alerting |
+| **8: Operations** | 19-21 | Disaster recovery, troubleshooting, production readiness |
+| **9: Autoscaling** | 22 | Custom Proxmox-based cluster autoscaler |
 
-**Phase 4: Self-Hosted GitLab & Jenkins (Articles 13-14)** ✅
-- **[Article 13](docs/articles/Article-13-GitLab-Deployment.md)**: GitLab Deployment on Kubernetes with Helm (5,487 words)
-- **[Article 14](docs/articles/Article-14-Jenkins-CICD.md)**: Jenkins CI/CD: Pipelines and Integration (5,621 words)
-
-**Phase 5: Advanced CI/CD Patterns (Articles 15-16)** ✅
-- **[Article 15](docs/articles/Article-15-Advanced-CICD-Patterns.md)**: Advanced CI/CD Patterns (8,795 words)
-- **[Article 16](docs/articles/Article-16-Deployment-Strategies.md)**: Deployment Strategies and Automation (6,564 words)
-
-**Phase 6: GitOps with ArgoCD (Article 17)** ✅
-- **[Article 17](docs/articles/Article-17-GitOps-ArgoCD.md)**: GitOps with ArgoCD (~9,200 words)
-
-**Phase 7: Observability & Monitoring (Article 18)** ✅
-- **[Article 18](docs/articles/Article-18-Observability-Stack.md)**: Complete Observability Stack (~8,500 words)
-
-**Phase 8: Operations & Troubleshooting (Articles 19-21)** ✅
-- **[Article 19](docs/articles/Article-19-Disaster-Recovery.md)**: Disaster Recovery (~9,100 words)
-- **[Article 20](docs/articles/Article-20-Troubleshooting-Guide.md)**: Troubleshooting Guide (~7,800 words)
-- **[Article 21](docs/articles/Article-21-Production-Readiness.md)**: Production Readiness (~8,100 words)
-
-**Phase 9: Advanced Topics (Article 22)** ✅
-- **[Article 22](docs/articles/Article-22-Cluster-Autoscaler.md)**: Cluster Autoscaler with Proxmox (~8,500 words)
-
-### Architecture
-
-- **[Network Design](docs/architecture/network-design.md)**: Network architecture details
-- **[GitOps Architecture](docs/architecture/gitops-architecture.md)**: GitOps deployment architecture
-- **[CI/CD vs GitOps](docs/comparisons/cicd-vs-gitops.md)**: Comparison and decision framework
-- **[Scripts README](scripts/README.md)**: Helper scripts documentation
-
-## 🔧 Project Structure
+## Project Structure
 
 ```
 .
-├── terraform/            # Terraform Infrastructure as Code
-│   ├── proxmox-vms/      # VM provisioning configuration
-│   ├── modules/          # Reusable Terraform modules
-│   └── docs/             # Terraform documentation
-├── ansible/              # Ansible configuration management
-│   ├── inventory/        # Inventory and variables
-│   ├── playbooks/        # Automation playbooks (01-06)
-│   └── roles/            # Reusable roles (gitlab, argocd, etc.)
-├── Kubernetes/           # Kubernetes manifests
-│   └── manifests/        # Application deployments
-│       ├── gitlab/       # GitLab deployment configurations
-│       └── argocd/       # ArgoCD deployment configurations
-├── gitops/               # GitOps repository (ArgoCD)
-│   ├── applications/     # ArgoCD Application manifests
-│   ├── base/             # Base Kustomize manifests
-│   ├── environments/     # Per-environment overlays (dev/staging/prod)
-│   └── scripts/          # GitOps automation scripts
-├── scripts/              # Helper scripts
-│   ├── automation/       # Integration scripts (provision-cluster.sh)
-│   ├── proxmox/          # VM management
-│   ├── network/          # Network testing
-│   └── kubernetes/       # K8s utilities
-├── docs/                 # Documentation
-│   ├── articles/         # Blog article series (Articles 1-17)
-│   ├── setup-guides/     # Setup and usage guides
-│   ├── architecture/     # Architecture documentation
-│   └── comparisons/      # Technology comparison guides
-└── examples/             # Sample applications and workflows
-    ├── cicd-templates/   # GitLab CI/CD templates
-    ├── deployment-strategies/  # Blue-green and canary examples
-    └── gitops-workflow/  # Hybrid CI/CD + GitOps example
+├── terraform/                  # Terraform Infrastructure as Code
+│   ├── proxmox-vms/            # VM provisioning configuration
+│   ├── modules/                # Reusable Terraform modules
+│   │   ├── k8s-node/           # Standard K8s node module
+│   │   └── k8s-autoscale-node/ # Auto-join node module
+│   └── docs/                   # Terraform documentation
+├── ansible/                    # Ansible configuration management
+│   ├── inventory/              # Inventory and variables
+│   ├── playbooks/              # Automation playbooks (01-10)
+│   └── roles/                  # Reusable roles
+│       ├── gitlab/             # GitLab CE deployment
+│       ├── jenkins/            # Jenkins CI/CD
+│       ├── argocd/             # ArgoCD GitOps
+│       ├── monitoring/         # Prometheus + Grafana + Loki
+│       ├── velero/             # Backup & restore
+│       └── cluster-autoscaler/ # Proxmox autoscaler
+├── gitops/                     # GitOps repository (ArgoCD)
+│   ├── applications/           # ArgoCD Application manifests
+│   ├── base/                   # Base Kustomize manifests
+│   ├── environments/           # Per-environment overlays (dev/staging/prod)
+│   └── scripts/                # GitOps automation scripts
+├── scripts/                    # Operational scripts
+│   ├── automation/             # Integration scripts (provision-cluster.sh)
+│   ├── assessment/             # Production readiness & security audits
+│   ├── autoscaling/            # Proxmox node provisioner & scaling tests
+│   ├── backup/                 # etcd backup/restore & Velero status
+│   ├── troubleshooting/        # Cluster diagnostic scripts
+│   ├── proxmox/                # VM management
+│   └── network/                # Network testing
+├── examples/                   # Sample applications and workflows
+│   ├── cicd-templates/         # GitLab CI & Jenkins templates
+│   ├── deployment-strategies/  # Blue-green and canary examples
+│   └── gitops-workflow/        # Hybrid CI/CD + GitOps example
+└── docs/                       # Documentation
+    ├── architecture/           # Architecture documentation
+    ├── checklists/             # Production & security checklists
+    ├── comparisons/            # Technology comparisons
+    ├── templates/              # Assessment templates
+    ├── troubleshooting/        # Troubleshooting guides
+    └── setup-guides/           # Setup and usage guides
 ```
 
-## 🎯 Roadmap
+## Usage Examples
 
-### Completed ✅
-- [x] **Phase 1**: Foundation (Proxmox, Network, Security)
-- [x] **Phase 2**: Kubernetes Cluster (v1.29.15 with Calico CNI)
-- [x] **Phase 3**: Infrastructure as Code (Terraform + Ansible)
-  - [x] Terraform for VM provisioning
-  - [x] Ansible configuration management
-  - [x] Complete automation pipeline (provision-cluster.sh)
-  - [x] Articles 10-12 (33,925 words)
-- [x] **Phase 4**: Self-Hosted GitLab & Jenkins (Articles 13-14)
-  - [x] GitLab CE deployment on Kubernetes via Helm (source control)
-  - [x] Private container registry in GitLab
-  - [x] Jenkins deployment on Kubernetes via Helm (CI engine)
-  - [x] Jenkins shared libraries and pipeline integration
-  - [x] Complete CI/CD pipelines (build → test → containerize → deploy)
-  - [x] Articles 13-14 (11,108 words)
+### Service Access
 
-- [x] **Phase 5**: Advanced CI/CD Patterns & Deployment Strategies (Articles 15-16)
-  - [x] Pipeline templates and includes
-  - [x] Matrix builds and dynamic environments
-  - [x] Blue-green and canary deployments
-  - [x] Security scanning automation (Trivy, Semgrep)
-  - [x] Automated monitoring and rollback
-  - [x] Articles 15-16 (15,359 words)
+All services are accessible via Traefik on NodePort 30080. Add to your `/etc/hosts`:
 
-- [x] **Phase 6**: GitOps with ArgoCD (Article 17)
-  - [x] ArgoCD deployment via Helm with Ansible automation
-  - [x] GitOps repository with Kustomize (base + overlay pattern)
-  - [x] Multi-environment management (dev/staging/prod)
-  - [x] Hybrid CI/CD + GitOps workflow (Jenkins builds, ArgoCD deploys)
-  - [x] Blue-green and canary deployments adapted for GitOps
-  - [x] Self-healing and drift detection
-  - [x] Article 17 (~8,046 words)
+```
+192.168.1.240  grafana.homelab.local prometheus.homelab.local alertmanager.homelab.local argocd.homelab.local gitlab.homelab.local dashboard.homelab.local traefik.homelab.local jenkins.homelab.local
+```
 
-- [x] **Phase 7**: Observability & Monitoring (Article 18)
-  - [x] kube-prometheus-stack deployment via Ansible
-  - [x] ServiceMonitors for GitLab, Jenkins, ArgoCD, Traefik
-  - [x] Grafana dashboards and Loki log aggregation
-  - [x] PrometheusRule-based alerting
-  - [x] Article 18 (~8,500 words)
+### Retrieve Service Credentials
 
-- [x] **Phase 8**: Operations & Troubleshooting (Articles 19-21)
-  - [x] Velero backup with MinIO S3-compatible storage
-  - [x] Etcd snapshots and multi-layer disaster recovery
-  - [x] Systematic troubleshooting methodology and diagnostic scripts
-  - [x] Production readiness assessment with CIS benchmarks
-  - [x] Articles 19-21 (~25,000 words)
-
-- [x] **Phase 9**: Advanced Topics (Article 22)
-  - [x] Custom cluster autoscaling with Proxmox API integration
-  - [x] Metrics Server for HPA and CronJob-based scaling
-  - [x] Dynamic worker node provisioning with cloud-init auto-join
-  - [x] Autoscaler monitoring with Prometheus
-  - [x] Article 22 (~8,500 words)
-
-**Progress**: 22/22 articles complete (100%) | ~132,000 words ✅ SERIES COMPLETE
-
-## 🔐 Security
-
-**⚠️ IMPORTANT: This repository is public. Never commit secrets!**
-
-- Use `.example` files as templates
-- Copy and customize for your environment
-- Never commit `hosts.ini` or `all.yml` with actual values
-- Use [Ansible Vault](https://docs.ansible.com/ansible/latest/user_guide/vault.html) for sensitive data
-- Review `.gitignore` before committing
-
-Files excluded from git:
-- Actual inventory files (`.example` versions provided)
-- SSH private keys
-- Terraform state files
-- Any files with "secret", "password", or "key" in the name
-
-## 💡 Usage Examples
-
-### Complete Cluster Deployment
-
-**One-command deployment:**
 ```bash
-./scripts/automation/provision-cluster.sh
+# Grafana (default: admin/admin)
+kubectl get secret -n monitoring kube-prometheus-stack-grafana \
+  -o jsonpath="{.data.admin-password}" | base64 -d; echo
+
+# ArgoCD
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d; echo
+
+# GitLab
+kubectl get secret -n gitlab gitlab-initial-root-password \
+  -o jsonpath="{.data.password}" | base64 -d; echo
+
+# Kubernetes Dashboard
+kubectl create token admin-user -n kubernetes-dashboard
 ```
 
-**Destroy cluster:**
+### Cluster Operations
+
 ```bash
-./scripts/automation/provision-cluster.sh --destroy
+# Run cluster diagnostics
+./scripts/troubleshooting/diagnose-cluster.sh
+
+# Run production readiness assessment
+./scripts/assessment/readiness-check.sh
+
+# Run security audit
+./scripts/assessment/security-audit.sh
+
+# Check backup status
+./scripts/backup/velero-backup-status.sh
+
+# Create etcd backup
+./scripts/backup/etcd-backup.sh
 ```
 
-### Terraform Only
+### Terraform
 
-**Create VMs:**
 ```bash
 cd terraform/proxmox-vms
-terraform init
-terraform plan
-terraform apply
+terraform init && terraform plan && terraform apply
 ```
 
-**View outputs:**
+### GitOps
+
 ```bash
-terraform output deployment_summary
-```
-
-### Ansible Only
-
-**Run network setup:**
-```bash
-cd ansible
-ansible-playbook playbooks/01-network-setup.yml
-```
-
-**Run all playbooks:**
-```bash
-ansible-playbook playbooks/01-network-setup.yml
-ansible-playbook playbooks/02-security-hardening.yml
-ansible-playbook playbooks/03-kubernetes-prereqs.yml
-ansible-playbook playbooks/04-install-kubernetes.yml
-ansible-playbook playbooks/05-deploy-gitlab.yml
-ansible-playbook playbooks/06-deploy-argocd.yml
-```
-
-**Run specific role:**
-```bash
-ansible-playbook playbooks/01-network-setup.yml --tags firewall
-```
-
-**Dry run (check mode):**
-```bash
-ansible-playbook playbooks/01-network-setup.yml --check
-```
-
-### GitLab Deployment
-
-**Deploy GitLab:**
-```bash
-cd ansible
-ansible-playbook playbooks/05-deploy-gitlab.yml
-```
-
-**Access GitLab:**
-```bash
-# Get initial root password
-kubectl get secret gitlab-gitlab-initial-root-password \
-  -n gitlab \
-  -o jsonpath="{.data.password}" | base64 --decode; echo
-
-# Access at: http://gitlab.homelab.local:30080
-```
-
-**Deploy GitLab Runner:**
-```bash
-cd Kubernetes/manifests/gitlab/runner
-helm install gitlab-runner gitlab/gitlab-runner \
-  --namespace gitlab-runner \
-  --values runner-values.yaml
-```
-
-### ArgoCD Deployment
-
-**Deploy ArgoCD:**
-```bash
-cd ansible
-ansible-playbook playbooks/06-deploy-argocd.yml
-```
-
-**Access ArgoCD:**
-```bash
-# Get initial admin password
-kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath="{.data.password}" | base64 --decode; echo
-
-# Access at: http://argocd.homelab.local
-```
-
-**Deploy your first GitOps application:**
-```bash
+# Deploy your first GitOps application
 kubectl apply -f gitops/applications/demo-app-dev.yaml
 argocd app get demo-app-dev
 ```
 
-### Jenkins Deployment
+## Roadmap
 
-**Deploy Jenkins:**
-```bash
-cd ansible
-ansible-playbook playbooks/07-deploy-jenkins.yml
-```
+All phases complete:
 
-**Access Jenkins:**
-```bash
-# Get initial admin password
-kubectl -n jenkins exec -it \
-  $(kubectl get pods -n jenkins -l app.kubernetes.io/component=jenkins-controller -o name) \
-  -- cat /run/secrets/additional/chart-admin-password; echo
+- [x] **Phase 1-2**: Foundation & Kubernetes (Proxmox, networking, security, K8s v1.29)
+- [x] **Phase 3**: Infrastructure as Code (Terraform + Ansible integration)
+- [x] **Phase 4**: Self-Hosted GitLab & Jenkins
+- [x] **Phase 5**: Advanced CI/CD Patterns & Deployment Strategies
+- [x] **Phase 6**: GitOps with ArgoCD
+- [x] **Phase 7**: Observability & Monitoring (Prometheus, Grafana, Loki)
+- [x] **Phase 8**: Operations (Disaster recovery, troubleshooting, production readiness)
+- [x] **Phase 9**: Cluster Autoscaling with Proxmox
 
-# Access at: http://jenkins.homelab.local
-```
+**22 articles complete | ~132,000 words | Series complete**
 
-**Configure Jenkins:**
-- Install suggested plugins
-- Connect to GitLab (OAuth integration)
-- Set up shared libraries from GitLab
-- Create first pipeline
+## Security
 
-**Create Proxmox VMs:**
-```bash
-# On Proxmox host
-./scripts/proxmox/create-k8s-vms.sh
-```
+**This repository is public. Never commit secrets!**
 
-**Test network connectivity:**
-```bash
-# On k8s-master node
-./scripts/network/test-network.sh
-```
+- Use `.example` files as templates and customize for your environment
+- Use [Ansible Vault](https://docs.ansible.com/ansible/latest/user_guide/vault.html) for sensitive data
+- Review `.gitignore` before committing
 
-## 📖 Article Series
+Files excluded from git: inventory files, SSH keys, Terraform state, articles, K8s manifests with secrets.
 
-This code accompanies a comprehensive [Medium article series](https://medium.com/@marcmassoteau) that explains:
-- Why each decision was made
-- Step-by-step implementation
-- Troubleshooting common issues
-- Production best practices
-
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please:
 
@@ -457,40 +317,22 @@ Contributions are welcome! Please:
 5. Push to the branch (`git push origin feature/amazing-feature`)
 6. Open a Pull Request
 
-## 🐛 Bug Reports
-
-Found a bug? Please [open an issue](https://github.com/marcmassoteau-jpg/massoteau-homelab-devops/issues) with:
-- Description of the problem
-- Steps to reproduce
-- Expected vs actual behavior
-- Environment details (OS, Ansible version, etc.)
-
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 Inspired by:
 - [Kubernetes the Hard Way](https://github.com/kelseyhightower/kubernetes-the-hard-way) by Kelsey Hightower
 - The [r/homelab](https://reddit.com/r/homelab) community
 - [Learn Linux TV](https://www.youtube.com/@LearnLinuxTV) Proxmox tutorials
 
-## 📞 Support
+## Support
 
 - **Issues**: [GitHub Issues](https://github.com/marcmassoteau-jpg/massoteau-homelab-devops/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/marcmassoteau-jpg/massoteau-homelab-devops/discussions)
 - **Article Series**: [Medium](https://medium.com/@marcmassoteau)
 - **Author**: Marc Massoteau
-
-## ⭐ Show Your Support
-
-If this project helps you, please:
-- ⭐ Star this repository
-- 🔀 Fork and customize for your needs
-- 📤 Share with others building homelabs
-- 🐛 Report issues to help improve
-- 💬 Contribute improvements
 
 ---
 
