@@ -1,0 +1,147 @@
+# Test Namespaces for Article Validation
+# Created: 2026-02-14
+# Purpose: Isolated environments for testing article procedures
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: testing
+  labels:
+    purpose: article-validation
+    environment: test
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-dev
+  labels:
+    purpose: article-validation
+    environment: test-dev
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-staging
+  labels:
+    purpose: article-validation
+    environment: test-staging
+
+---
+# Resource Quota for 'testing' namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: test-quota
+  namespace: testing
+spec:
+  hard:
+    pods: "20"
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    persistentvolumeclaims: "10"
+
+---
+# Resource Quota for 'test-dev' namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: test-quota
+  namespace: test-dev
+spec:
+  hard:
+    pods: "15"
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+    persistentvolumeclaims: "5"
+
+---
+# Resource Quota for 'test-staging' namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: test-quota
+  namespace: test-staging
+spec:
+  hard:
+    pods: "15"
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+    persistentvolumeclaims: "5"
+
+---
+# Limit Range for 'testing' namespace
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: test-limits
+  namespace: testing
+spec:
+  limits:
+  - max:
+      cpu: "2"
+      memory: 4Gi
+    min:
+      cpu: "100m"
+      memory: 128Mi
+    default:
+      cpu: "500m"
+      memory: 512Mi
+    defaultRequest:
+      cpu: "200m"
+      memory: 256Mi
+    type: Container
+
+---
+# Limit Range for 'test-dev' namespace
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: test-limits
+  namespace: test-dev
+spec:
+  limits:
+  - max:
+      cpu: "1"
+      memory: 2Gi
+    min:
+      cpu: "50m"
+      memory: 64Mi
+    default:
+      cpu: "250m"
+      memory: 256Mi
+    defaultRequest:
+      cpu: "100m"
+      memory: 128Mi
+    type: Container
+
+---
+# Limit Range for 'test-staging' namespace
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: test-limits
+  namespace: test-staging
+spec:
+  limits:
+  - max:
+      cpu: "1"
+      memory: 2Gi
+    min:
+      cpu: "50m"
+      memory: 64Mi
+    default:
+      cpu: "250m"
+      memory: 256Mi
+    defaultRequest:
+      cpu: "100m"
+      memory: 128Mi
+    type: Container

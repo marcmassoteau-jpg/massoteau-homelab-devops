@@ -1,0 +1,135 @@
+---
+# Monitoring Stack Ansible Role - Default Variables
+# Override these in your playbook or inventory
+
+#=============================================================================
+# GENERAL CONFIGURATION
+#=============================================================================
+
+# Monitoring release configuration
+monitoring_namespace: monitoring
+monitoring_release_name: kube-prometheus-stack
+monitoring_prometheus_chart_repo: https://prometheus-community.github.io/helm-charts
+monitoring_prometheus_chart_name: kube-prometheus-stack
+monitoring_prometheus_chart_version: "65.1.0"
+
+# Loki release configuration
+monitoring_loki_chart_repo: https://grafana.github.io/helm-charts
+monitoring_loki_chart_name: loki
+monitoring_loki_chart_version: "6.22.0"
+
+# Promtail release configuration
+monitoring_promtail_chart_name: promtail
+monitoring_promtail_chart_version: "6.16.6"
+
+#=============================================================================
+# DOMAIN CONFIGURATION
+#=============================================================================
+
+# Service domains
+monitoring_grafana_domain: grafana.homelab.local
+monitoring_prometheus_domain: prometheus.homelab.local
+monitoring_alertmanager_domain: alertmanager.homelab.local
+
+#=============================================================================
+# PROMETHEUS RESOURCES
+#=============================================================================
+
+# Prometheus server resources
+monitoring_prometheus_cpu_request: "250m"
+monitoring_prometheus_cpu_limit: "1"
+monitoring_prometheus_memory_request: "512Mi"
+monitoring_prometheus_memory_limit: "2Gi"
+
+# Prometheus storage
+monitoring_prometheus_retention: "15d"
+monitoring_prometheus_storage_size: "10Gi"
+
+#=============================================================================
+# GRAFANA RESOURCES
+#=============================================================================
+
+# Grafana resources
+monitoring_grafana_cpu_request: "100m"
+monitoring_grafana_cpu_limit: "500m"
+monitoring_grafana_memory_request: "128Mi"
+monitoring_grafana_memory_limit: "512Mi"
+
+# Grafana admin credentials
+monitoring_grafana_admin_password: ""  # Set via -e or ansible-vault. Empty = auto-generated
+
+#=============================================================================
+# ALERTMANAGER RESOURCES
+#=============================================================================
+
+# AlertManager resources
+monitoring_alertmanager_cpu_request: "50m"
+monitoring_alertmanager_cpu_limit: "200m"
+monitoring_alertmanager_memory_request: "64Mi"
+monitoring_alertmanager_memory_limit: "256Mi"
+
+#=============================================================================
+# LOKI RESOURCES
+#=============================================================================
+
+# Loki resources
+monitoring_loki_cpu_request: "100m"
+monitoring_loki_cpu_limit: "500m"
+monitoring_loki_memory_request: "128Mi"
+monitoring_loki_memory_limit: "512Mi"
+
+# Loki storage
+monitoring_loki_retention: "168h"  # 7 days
+monitoring_loki_storage_size: "10Gi"
+
+#=============================================================================
+# PROMTAIL RESOURCES
+#=============================================================================
+
+# Promtail resources
+monitoring_promtail_cpu_request: "50m"
+monitoring_promtail_cpu_limit: "200m"
+monitoring_promtail_memory_request: "64Mi"
+monitoring_promtail_memory_limit: "128Mi"
+
+#=============================================================================
+# INGRESS CONFIGURATION
+#=============================================================================
+
+# Ingress controller class
+monitoring_ingress_class: traefik
+monitoring_ingress_enabled: true
+
+# TLS configuration
+monitoring_tls_enabled: false  # TLS terminated at Traefik if needed
+
+#=============================================================================
+# FEATURES CONFIGURATION
+#=============================================================================
+
+# ServiceMonitor toggles for existing services
+monitoring_servicemonitor_gitlab: true
+monitoring_servicemonitor_jenkins: true
+monitoring_servicemonitor_argocd: true
+monitoring_servicemonitor_traefik: true
+
+# Alerting
+monitoring_alerting_enabled: true
+
+#=============================================================================
+# DEPLOYMENT OPTIONS
+#=============================================================================
+
+# Helm deployment options
+monitoring_helm_timeout: "10m"
+monitoring_helm_wait: true
+
+# Force redeploy even if already installed
+monitoring_force_redeploy: false
+
+# Create namespace
+monitoring_create_namespace: true
+
+# Wait for pods to be ready
+monitoring_wait_for_ready: true
+monitoring_ready_timeout: 300  # 5 minutes

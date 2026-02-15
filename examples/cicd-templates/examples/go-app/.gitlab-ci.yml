@@ -1,0 +1,190 @@
+# Go Application Pipeline
+# Demonstrates template usage for a Go application
+
+include:
+  - project: 'homelab/cicd-templates'
+    ref: main
+    file:
+      - 'templates/.build-template.yml'
+      - 'templates/.test-template.yml'
+      - 'templates/.security-scan.yml'
+      - 'templates/.docker-build.yml'
+      - 'templates/.k8s-deploy.yml'
+
+stages:
+  - build
+  - test
+  - security
+  - package
+  - deploy
+
+variables:
+  GO_VERSION: "1.21"
+  APP_NAME: "go-demo-app"
+  CGO_ENABLED: "0"
+  GOOS: "linux"
+  GOARCH: "amd64"
+
+# Build the application
+build:
+  extends: .build-go
+  variables:
+    BUILD_COMMAND: "go build -o bin/app -ldflags='-w -s -X main.version=$CI_COMMIT_SHORT_SHA' ."
+    BUILD_OUTPUT_DIR: "bin"
+  script:
+    - echo "Building Go application..."
+    - go version
+    - go mod download
+    - go build -o bin/app -ldflags="-w -s -X main.version=$CI_COMMIT_SHORT_SHA" .
+    - ls -lh bin/
+
+# Run unit tests
+test-unit:
+  extends: .test-go
+  variables:
+    TEST_COMMAND: "go test -v -race -coverprofile=coverage.out -covermode=atomic ./..."
+  script:
+    - go version
+    - go mod download
+    - go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+    - go tool cover -func=coverage.out
+    - go tool cover -html=coverage.out -o coverage.html
+  coverage: '/total:.*\s+(\d+\.\d+)%/'
+  artifacts:
+    paths:
+      - coverage.out
+      - coverage.html
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+  needs: []
+
+# Run benchmarks
+benchmark:
+  stage: test
+  image: golang:1.21-alpine
+  script:
+    - go version
+    - go test -bench=. -benchmem -run=^$ ./... | tee benchmark.txt
+  artifacts:
+    paths:
+      - benchmark.txt
+    expire_in: 1 week
+  needs: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  allow_failure: true
+
+# Code quality
+lint:
+  stage: test
+  image: golangci/golangci-lint:latest
+  script:
+    - golangci-lint run --timeout 5m
+  needs: []
+  allow_failure: true
+
+# Security: Gosec static analysis
+scan-gosec:
+  stage: security
+  image: securego/gosec:latest
+  script:
+    - gosec -fmt json -out gosec-report.json ./... || true
+    - gosec ./...
+  artifacts:
+    paths:
+      - gosec-report.json
+    expire_in: 1 week
+  needs: []
+  allow_failure: true
+
+# Security: Dependency scanning
+scan-dependencies:
+  extends: .scan-dependencies
+  image: golang:1.21-alpine
+  script:
+    - go install golang.org/x/vuln/cmd/govulncheck@latest
+    - govulncheck ./... | tee govulncheck-report.txt || true
+  artifacts:
+    paths:
+      - govulncheck-report.txt
+    expire_in: 1 week
+  needs: []
+  allow_failure: true
+
+# Security: Secret scanning
+scan-secrets:
+  extends: .scan-secrets
+  needs: []
+
+# Build Docker image
+docker-build:
+  extends: .docker-build
+  variables:
+    DOCKERFILE_PATH: "Dockerfile"
+  needs:
+    - build
+    - test-unit
+
+# Scan container image
+scan-container:
+  extends: .scan-trivy-image
+  needs: ["docker-build"]
+
+# Matrix build: Multiple platforms
+build-multiplatform:
+  stage: build
+  image: golang:1.21-alpine
+  parallel:
+    matrix:
+      - GOOS: ["linux", "darwin", "windows"]
+        GOARCH: ["amd64", "arm64"]
+  script:
+    - echo "Building for $GOOS/$GOARCH..."
+    - go build -o bin/app-${GOOS}-${GOARCH} -ldflags="-w -s" .
+    - ls -lh bin/
+  artifacts:
+    paths:
+      - bin/
+    expire_in: 1 week
+  needs: []
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  allow_failure: true
+
+# Deploy to development
+deploy-dev:
+  extends: .deploy-dev
+  needs: ["docker-build"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+# Deploy review app
+deploy-review:
+  extends: .deploy-review
+  needs: ["docker-build"]
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+
+# Deploy to staging
+deploy-staging:
+  extends: .deploy-staging
+  needs:
+    - docker-build
+    - scan-container
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy to production (manual)
+deploy-prod:
+  extends: .deploy-production
+  needs:
+    - docker-build
+    - scan-container
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG

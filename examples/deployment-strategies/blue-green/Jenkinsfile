@@ -1,0 +1,353 @@
+// Blue-Green Deployment Pipeline
+// Automates zero-downtime deployments using blue-green strategy
+//
+// Flow:
+// 1. Detect which environment is currently active
+// 2. Deploy new version to inactive environment
+// 3. Run smoke tests against inactive environment
+// 4. Manual approval gate
+// 5. Switch traffic to newly deployed environment
+// 6. Optional: Scale down old environment
+
+@Library('cicd-shared-library') _
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:debug
+    command: ['sleep']
+    args: ['infinity']
+    volumeMounts:
+    - name: kaniko-secret
+      mountPath: /kaniko/.docker
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ['cat']
+    tty: true
+  - name: curl
+    image: curlimages/curl:latest
+    command: ['cat']
+    tty: true
+  volumes:
+  - name: kaniko-secret
+    secret:
+      secretName: registry-credentials
+      items:
+      - key: .dockerconfigjson
+        path: config.json
+"""
+        }
+    }
+
+    environment {
+        NAMESPACE = 'production'
+        APP_NAME = 'myapp'
+        CI_REGISTRY = 'registry.gitlab.homelab.local'
+        REGISTRY_IMAGE = "${env.CI_REGISTRY}/${env.APP_NAME}"
+        ACTIVE_ENV = ''
+        INACTIVE_ENV = ''
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+        timeout(time: 1, unit: 'HOURS')
+        timestamps()
+    }
+
+    stages {
+        //=================================================
+        // BUILD STAGE
+        //=================================================
+        stage('Build Image') {
+            steps {
+                script {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'registry-credentials',
+                            usernameVariable: 'REGISTRY_USER',
+                            passwordVariable: 'REGISTRY_PASSWORD'
+                        )
+                    ]) {
+                        dockerBuild(
+                            dockerfile: 'Dockerfile',
+                            imageName: env.REGISTRY_IMAGE,
+                            imageTag: env.GIT_COMMIT,
+                            additionalTags: ['latest']
+                        )
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // DETECT ACTIVE ENVIRONMENT
+        //=================================================
+        stage('Detect Active') {
+            steps {
+                container('kubectl') {
+                    script {
+                        echo "Detecting current active environment..."
+
+                        // Get the version label from production service selector
+                        def activeVersion = sh(
+                            script: """
+                                kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME},role=active -o jsonpath='{.items[0].metadata.labels.version}' 2>/dev/null || echo ""
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        if (activeVersion == 'blue') {
+                            env.ACTIVE_ENV = 'blue'
+                            env.INACTIVE_ENV = 'green'
+                        } else if (activeVersion == 'green') {
+                            env.ACTIVE_ENV = 'green'
+                            env.INACTIVE_ENV = 'blue'
+                        } else {
+                            // No active environment, default to deploying to blue
+                            echo "No active environment detected, defaulting to blue as inactive"
+                            env.ACTIVE_ENV = 'green'
+                            env.INACTIVE_ENV = 'blue'
+                        }
+
+                        echo "Active environment: ${env.ACTIVE_ENV}"
+                        echo "Deploying to inactive environment: ${env.INACTIVE_ENV}"
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // DEPLOY TO INACTIVE ENVIRONMENT
+        //=================================================
+        stage('Deploy to Inactive') {
+            steps {
+                container('kubectl') {
+                    script {
+                        echo "Deploying version ${env.GIT_COMMIT} to ${env.INACTIVE_ENV} environment"
+
+                        // Update deployment image
+                        sh """
+                            kubectl set image deployment/myapp-${env.INACTIVE_ENV} \\
+                                myapp=${env.REGISTRY_IMAGE}:${env.GIT_COMMIT} \\
+                                -n ${env.NAMESPACE}
+                        """
+
+                        // Ensure pods are labeled as inactive
+                        sh """
+                            kubectl label pods -l app=${env.APP_NAME},version=${env.INACTIVE_ENV} \\
+                                role=inactive \\
+                                --overwrite \\
+                                -n ${env.NAMESPACE}
+                        """
+
+                        // Wait for rollout to complete
+                        sh """
+                            kubectl rollout status deployment/myapp-${env.INACTIVE_ENV} \\
+                                -n ${env.NAMESPACE} \\
+                                --timeout=5m
+                        """
+
+                        echo "Deployment to ${env.INACTIVE_ENV} complete"
+                        sh "kubectl get pods -n ${env.NAMESPACE} -l app=${env.APP_NAME},version=${env.INACTIVE_ENV}"
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // SMOKE TEST INACTIVE ENVIRONMENT
+        //=================================================
+        stage('Smoke Test Inactive') {
+            steps {
+                container('curl') {
+                    script {
+                        echo "Running smoke tests against ${env.INACTIVE_ENV} environment..."
+
+                        def inactiveService = "myapp-${env.INACTIVE_ENV}.${env.NAMESPACE}.svc.cluster.local"
+
+                        // Retry logic for smoke tests
+                        retry(3) {
+                            // Health check
+                            echo "Testing health endpoint..."
+                            sh "curl -f http://${inactiveService}/health || exit 1"
+
+                            // Ready check
+                            echo "Testing ready endpoint..."
+                            sh "curl -f http://${inactiveService}/ready || exit 1"
+
+                            // Application endpoint
+                            echo "Testing main endpoint..."
+                            sh """
+                                RESPONSE=\$(curl -s http://${inactiveService}/)
+                                echo "Response: \$RESPONSE"
+                            """
+
+                            // Verify version
+                            sh """
+                                VERSION=\$(curl -s http://${inactiveService}/version || echo "unknown")
+                                echo "Deployed version: \$VERSION"
+                            """
+                        }
+
+                        echo "✅ Smoke tests passed for ${env.INACTIVE_ENV} environment"
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // SWITCH TRAFFIC
+        //=================================================
+        stage('Switch Traffic') {
+            steps {
+                container('kubectl') {
+                    script {
+                        // Manual approval before switching traffic
+                        input(
+                            message: "Switch production traffic from ${env.ACTIVE_ENV} to ${env.INACTIVE_ENV}?",
+                            ok: 'Switch Traffic'
+                        )
+
+                        echo "===================================="
+                        echo "SWITCHING PRODUCTION TRAFFIC"
+                        echo "From: ${env.ACTIVE_ENV} → To: ${env.INACTIVE_ENV}"
+                        echo "===================================="
+
+                        // Label new environment pods as active
+                        echo "Setting ${env.INACTIVE_ENV} pods to active..."
+                        sh """
+                            kubectl label pods -l app=${env.APP_NAME},version=${env.INACTIVE_ENV} \\
+                                role=active \\
+                                --overwrite \\
+                                -n ${env.NAMESPACE}
+                        """
+
+                        // Label old environment pods as inactive
+                        echo "Setting ${env.ACTIVE_ENV} pods to inactive..."
+                        sh """
+                            kubectl label pods -l app=${env.APP_NAME},version=${env.ACTIVE_ENV} \\
+                                role=inactive \\
+                                --overwrite \\
+                                -n ${env.NAMESPACE} || true
+                        """
+
+                        // Verify the switch
+                        echo ""
+                        echo "Verifying traffic switch..."
+                        sh "kubectl get pods -n ${env.NAMESPACE} -l app=${env.APP_NAME} -L role,version"
+
+                        echo ""
+                        echo "✅ Traffic switched from ${env.ACTIVE_ENV} to ${env.INACTIVE_ENV}"
+                        echo "Production is now running on ${env.INACTIVE_ENV}"
+                        echo "Old ${env.ACTIVE_ENV} environment is still running for quick rollback"
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // ROLLBACK (MANUAL TRIGGER)
+        //=================================================
+        stage('Rollback') {
+            when {
+                expression { return params.ROLLBACK == true }
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        echo "===================================="
+                        echo "ROLLING BACK DEPLOYMENT"
+                        echo "From: ${env.INACTIVE_ENV} → To: ${env.ACTIVE_ENV}"
+                        echo "===================================="
+
+                        // Revert labels
+                        sh """
+                            kubectl label pods -l app=${env.APP_NAME},version=${env.ACTIVE_ENV} \\
+                                role=active \\
+                                --overwrite \\
+                                -n ${env.NAMESPACE}
+                        """
+
+                        sh """
+                            kubectl label pods -l app=${env.APP_NAME},version=${env.INACTIVE_ENV} \\
+                                role=inactive \\
+                                --overwrite \\
+                                -n ${env.NAMESPACE}
+                        """
+
+                        echo "✅ Rolled back to ${env.ACTIVE_ENV}"
+                        sh "kubectl get pods -n ${env.NAMESPACE} -l app=${env.APP_NAME} -L role,version"
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // CLEANUP (OPTIONAL)
+        //=================================================
+        stage('Scale Down Old') {
+            when {
+                expression { return params.SCALE_DOWN_OLD == true }
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        input(
+                            message: "Scale down old ${env.ACTIVE_ENV} environment to 1 replica?",
+                            ok: 'Scale Down'
+                        )
+
+                        echo "Scaling down old ${env.ACTIVE_ENV} environment to 1 replica..."
+                        sh """
+                            kubectl scale deployment myapp-${env.ACTIVE_ENV} \\
+                                --replicas=1 \\
+                                -n ${env.NAMESPACE}
+                        """
+
+                        echo "Old environment scaled down but still available for quick rollback"
+                    }
+                }
+            }
+        }
+
+        stage('Cleanup Old') {
+            when {
+                expression { return params.CLEANUP_OLD == true }
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        input(
+                            message: "⚠️  Scale down old ${env.ACTIVE_ENV} environment to 0 replicas?",
+                            ok: 'Cleanup'
+                        )
+
+                        echo "⚠️  SCALING DOWN OLD ENVIRONMENT TO 0"
+                        sh """
+                            kubectl scale deployment myapp-${env.ACTIVE_ENV} \\
+                                --replicas=0 \\
+                                -n ${env.NAMESPACE}
+                        """
+
+                        echo "Old ${env.ACTIVE_ENV} environment stopped (can be restarted for rollback)"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Blue-Green deployment completed successfully!'
+        }
+        failure {
+            echo 'Blue-Green deployment failed!'
+        }
+    }
+}

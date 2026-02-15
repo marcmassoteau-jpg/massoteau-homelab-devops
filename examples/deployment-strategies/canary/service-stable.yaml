@@ -1,0 +1,27 @@
+# Stable Service
+# Routes traffic to stable deployment
+# Used in weighted traffic splitting with canary service
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-stable
+  namespace: production
+  labels:
+    app: myapp
+    version: stable
+spec:
+  selector:
+    app: myapp
+    version: stable
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None

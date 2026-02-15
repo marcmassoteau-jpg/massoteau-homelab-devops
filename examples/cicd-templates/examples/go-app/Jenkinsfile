@@ -1,0 +1,407 @@
+// Go Application Pipeline
+// Demonstrates Jenkins pipeline for Go application
+
+@Library('cicd-shared-library') _
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: go
+    image: golang:1.21-alpine
+    command: ['cat']
+    tty: true
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:debug
+    command: ['sleep']
+    args: ['infinity']
+    volumeMounts:
+    - name: kaniko-secret
+      mountPath: /kaniko/.docker
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ['cat']
+    tty: true
+  - name: trivy
+    image: aquasec/trivy:latest
+    command: ['cat']
+    tty: true
+  - name: golangci-lint
+    image: golangci/golangci-lint:latest
+    command: ['cat']
+    tty: true
+  volumes:
+  - name: kaniko-secret
+    secret:
+      secretName: registry-credentials
+      items:
+      - key: .dockerconfigjson
+        path: config.json
+"""
+        }
+    }
+
+    environment {
+        GO_VERSION = '1.21'
+        APP_NAME = 'go-demo-app'
+        CI_REGISTRY = 'registry.gitlab.homelab.local'
+        REGISTRY_IMAGE = "${env.CI_REGISTRY}/${env.APP_NAME}"
+        CGO_ENABLED = '0'
+        GOOS = 'linux'
+        GOARCH = 'amd64'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 45, unit: 'MINUTES')
+        timestamps()
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                container('go') {
+                    script {
+                        sh '''
+                            echo "Building Go application..."
+                            go version
+                            go mod download
+                            go build -o bin/app -ldflags="-w -s -X main.version=${GIT_COMMIT}" .
+                            ls -lh bin/
+                        '''
+
+                        stash(
+                            name: 'build-artifacts',
+                            includes: 'bin/**/*'
+                        )
+                        archiveArtifacts(
+                            artifacts: 'bin/**/*',
+                            allowEmptyArchive: false,
+                            fingerprint: true
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Test') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        container('go') {
+                            script {
+                                sh '''
+                                    go version
+                                    go mod download
+                                    go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+                                    go tool cover -func=coverage.out
+                                    go tool cover -html=coverage.out -o coverage.html
+                                '''
+
+                                // Archive coverage
+                                archiveArtifacts(
+                                    artifacts: 'coverage.out,coverage.html',
+                                    allowEmptyArchive: false,
+                                    fingerprint: true
+                                )
+
+                                // Publish coverage
+                                publishHTML(target: [
+                                    allowMissing: false,
+                                    alwaysLinkToLastBuild: true,
+                                    keepAll: true,
+                                    reportDir: '.',
+                                    reportFiles: 'coverage.html',
+                                    reportName: 'Go Coverage Report'
+                                ])
+                            }
+                        }
+                    }
+                }
+
+                stage('Benchmarks') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        container('go') {
+                            script {
+                                input message: 'Run Benchmarks?', ok: 'Run'
+
+                                sh '''
+                                    go version
+                                    go test -bench=. -benchmem -run=^$ ./... | tee benchmark.txt
+                                '''
+
+                                archiveArtifacts(
+                                    artifacts: 'benchmark.txt',
+                                    allowEmptyArchive: true,
+                                    fingerprint: true
+                                )
+                            }
+                        }
+                    }
+                }
+
+                stage('Lint') {
+                    steps {
+                        container('golangci-lint') {
+                            script {
+                                sh 'golangci-lint run --timeout 5m || true'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Security') {
+            parallel {
+                stage('Gosec') {
+                    agent {
+                        kubernetes {
+                            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: gosec
+    image: securego/gosec:latest
+    command: ['cat']
+    tty: true
+"""
+                        }
+                    }
+                    steps {
+                        container('gosec') {
+                            script {
+                                sh '''
+                                    gosec -fmt json -out gosec-report.json ./... || true
+                                    gosec ./... || true
+                                '''
+
+                                archiveArtifacts(
+                                    artifacts: 'gosec-report.json',
+                                    allowEmptyArchive: true,
+                                    fingerprint: true
+                                )
+                            }
+                        }
+                    }
+                }
+
+                stage('Dependencies') {
+                    steps {
+                        container('go') {
+                            script {
+                                sh '''
+                                    go install golang.org/x/vuln/cmd/govulncheck@latest
+                                    govulncheck ./... | tee govulncheck-report.txt || true
+                                '''
+
+                                archiveArtifacts(
+                                    artifacts: 'govulncheck-report.txt',
+                                    allowEmptyArchive: true,
+                                    fingerprint: true
+                                )
+                            }
+                        }
+                    }
+                }
+
+                stage('Secrets') {
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'secrets',
+                                allowFailure: false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Package') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                script {
+                    unstash 'build-artifacts'
+
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'registry-credentials',
+                            usernameVariable: 'REGISTRY_USER',
+                            passwordVariable: 'REGISTRY_PASSWORD'
+                        )
+                    ]) {
+                        dockerBuild(
+                            dockerfile: 'Dockerfile',
+                            imageName: env.REGISTRY_IMAGE,
+                            imageTag: env.GIT_COMMIT
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Scan Container') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                script {
+                    securityScan(
+                        type: 'trivy-image',
+                        image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                        severity: 'HIGH,CRITICAL',
+                        allowFailure: true
+                    )
+                }
+            }
+        }
+
+        stage('Multi-Platform Build') {
+            when {
+                anyOf {
+                    tag pattern: 'v\\d+\\.\\d+\\.\\d+', comparator: 'REGEXP'
+                    allOf {
+                        branch 'main'
+                        expression { return params.BUILD_MULTIPLATFORM == true }
+                    }
+                }
+            }
+            matrix {
+                axes {
+                    axis {
+                        name 'TARGET_OS'
+                        values 'linux', 'darwin', 'windows'
+                    }
+                    axis {
+                        name 'TARGET_ARCH'
+                        values 'amd64', 'arm64'
+                    }
+                }
+                stages {
+                    stage('Build Platform') {
+                        steps {
+                            container('go') {
+                                script {
+                                    sh """
+                                        echo "Building for ${TARGET_OS}/${TARGET_ARCH}..."
+                                        GOOS=${TARGET_OS} GOARCH=${TARGET_ARCH} go build -o bin/app-${TARGET_OS}-${TARGET_ARCH} -ldflags="-w -s" .
+                                        ls -lh bin/
+                                    """
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            post {
+                success {
+                    archiveArtifacts(
+                        artifacts: 'bin/**/*',
+                        allowEmptyArchive: false,
+                        fingerprint: true
+                    )
+                }
+            }
+        }
+
+        stage('Deploy') {
+            stages {
+                stage('Deploy Dev') {
+                    when {
+                        branch 'develop'
+                    }
+                    steps {
+                        script {
+                            k8sDeploy(
+                                namespace: 'development',
+                                deployment: env.APP_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                                replicas: 1
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Review') {
+                    when {
+                        changeRequest()
+                    }
+                    steps {
+                        script {
+                            k8sDeploy.deployReview(
+                                deployment: env.APP_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}"
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Staging') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        script {
+                            k8sDeploy(
+                                namespace: 'staging',
+                                deployment: env.APP_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                                replicas: 2
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Production') {
+                    when {
+                        anyOf {
+                            branch 'main'
+                            tag pattern: 'v\\d+\\.\\d+\\.\\d+', comparator: 'REGEXP'
+                        }
+                    }
+                    steps {
+                        script {
+                            input message: 'Deploy to Production?', ok: 'Deploy'
+
+                            k8sDeploy(
+                                namespace: 'production',
+                                deployment: env.APP_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                                replicas: 3
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo 'Go pipeline completed successfully!'
+        }
+        failure {
+            echo 'Go pipeline failed!'
+        }
+    }
+}

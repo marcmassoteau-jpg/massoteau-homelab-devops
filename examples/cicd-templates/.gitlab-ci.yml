@@ -1,0 +1,269 @@
+# Advanced GitLab CI/CD Pipeline with Template Includes
+# Demonstrates reusable templates, matrix builds, dynamic environments, and advanced patterns
+
+# Include reusable templates
+include:
+  - local: 'templates/.build-template.yml'
+  - local: 'templates/.test-template.yml'
+  - local: 'templates/.security-scan.yml'
+  - local: 'templates/.docker-build.yml'
+  - local: 'templates/.k8s-deploy.yml'
+
+# Pipeline stages
+stages:
+  - build
+  - test
+  - security
+  - package
+  - deploy
+  - cleanup
+
+# Global variables
+variables:
+  DOCKER_DRIVER: overlay2
+  CI_REGISTRY: registry.gitlab.homelab.local
+  KUBECONFIG: /etc/deploy/config
+
+# Default rules for all jobs
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_TAG
+
+# ============================================
+# BUILD STAGE
+# ============================================
+
+build-application:
+  extends: .build-node
+  variables:
+    BUILD_COMMAND: "npm ci && npm run build"
+    BUILD_OUTPUT_DIR: "dist"
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# Matrix build example: Test multiple Node versions
+build-matrix:
+  extends: .build-node
+  parallel:
+    matrix:
+      - NODE_VERSION: ["16", "18", "20"]
+        NODE_IMAGE: ["alpine", "bullseye"]
+  image: node:${NODE_VERSION}-${NODE_IMAGE}
+  script:
+    - echo "Building with Node ${NODE_VERSION} on ${NODE_IMAGE}"
+    - node --version
+    - npm --version
+    - npm ci
+    - npm run build
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+      when: manual
+      allow_failure: true
+
+# ============================================
+# TEST STAGE
+# ============================================
+
+test-unit:
+  extends: .test-node
+  variables:
+    TEST_COMMAND: "npm ci && npm run test:unit"
+  needs: ["build-application"]
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+test-integration:
+  extends: .test-integration
+  image: node:18-alpine
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  variables:
+    TEST_COMMAND: "npm ci && npm run test:integration"
+    DATABASE_URL: "postgresql://testuser:testpass@postgres:5432/testdb"
+    REDIS_URL: "redis://redis:6379"
+  needs: ["build-application"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+# E2E tests (manual trigger)
+test-e2e:
+  extends: .test-node
+  variables:
+    TEST_COMMAND: "npm ci && npm run test:e2e"
+  needs: ["build-application"]
+  when: manual
+  allow_failure: true
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+
+# ============================================
+# SECURITY STAGE
+# ============================================
+
+security-scan-filesystem:
+  extends: .scan-trivy-fs
+  needs: []
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+security-scan-secrets:
+  extends: .scan-secrets
+  needs: []
+  allow_failure: false
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+security-scan-dependencies:
+  extends: .scan-dependencies
+  image: node:18-alpine
+  script:
+    - npm ci
+    - npm audit --audit-level=high --json > npm-audit.json || true
+    - npm audit --audit-level=high
+  artifacts:
+    reports:
+      dependency_scanning: npm-audit.json
+    expire_in: 1 week
+    when: always
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+security-scan-sast:
+  extends: .scan-sast
+  needs: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_MERGE_REQUEST_ID
+
+# ============================================
+# PACKAGE STAGE
+# ============================================
+
+build-docker-image:
+  extends: .docker-build
+  variables:
+    DOCKERFILE_PATH: "Dockerfile"
+    IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    ADDITIONAL_TAGS: "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+  needs:
+    - job: build-application
+      artifacts: true
+    - job: test-unit
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+build-docker-latest:
+  extends: .docker-build-latest
+  needs:
+    - job: build-application
+      artifacts: true
+    - job: test-unit
+      artifacts: false
+    - job: test-integration
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+security-scan-container:
+  extends: .scan-trivy-image
+  variables:
+    SCAN_SEVERITY: "HIGH,CRITICAL"
+  needs: ["build-docker-image"]
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# ============================================
+# DEPLOY STAGE
+# ============================================
+
+# Deploy to development automatically
+deploy-dev:
+  extends: .deploy-dev
+  needs: ["build-docker-image"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+# Deploy review app for merge requests
+deploy-review-app:
+  extends: .deploy-review
+  needs: ["build-docker-image"]
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+
+# Deploy to staging on main branch
+deploy-staging:
+  extends: .deploy-staging
+  needs:
+    - build-docker-latest
+    - security-scan-container
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy to production (manual approval required)
+deploy-production:
+  extends: .deploy-production
+  needs:
+    - build-docker-latest
+    - security-scan-container
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# Canary deployment (manual)
+deploy-canary:
+  extends: .deploy-canary
+  variables:
+    NAMESPACE: "production"
+  needs: ["build-docker-latest"]
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ============================================
+# CLEANUP STAGE
+# ============================================
+
+stop-review-app:
+  extends: .stop-review
+  needs: []
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+      when: manual
+
+# ============================================
+# SCHEDULED PIPELINES
+# ============================================
+
+# Nightly security scan
+nightly-security-scan:
+  extends: .scan-trivy-fs
+  variables:
+    SCAN_SEVERITY: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  needs: []
+
+# ============================================
+# PARENT-CHILD PIPELINE EXAMPLE
+# ============================================
+
+trigger-downstream:
+  stage: deploy
+  trigger:
+    include: .gitlab-ci-child.yml
+    strategy: depend
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - microservices/**/*
+  needs: []

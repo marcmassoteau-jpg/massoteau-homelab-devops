@@ -1,0 +1,190 @@
+# Kubernetes Deployment Template
+# Reusable template for deploying to Kubernetes
+# Usage: extends: .k8s-deploy
+
+.k8s-deploy:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  variables:
+    NAMESPACE: "default"
+    DEPLOYMENT_NAME: "$CI_PROJECT_NAME"
+    IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    REPLICAS: "3"
+    KUBECONFIG_PATH: "$KUBECONFIG"
+  before_script:
+    - echo "Configuring kubectl..."
+    - kubectl version --client
+  script:
+    - echo "Deploying $DEPLOYMENT_NAME to $NAMESPACE namespace..."
+    - kubectl config use-context homelab || true
+    - kubectl get nodes
+    - |
+      if kubectl get deployment $DEPLOYMENT_NAME -n $NAMESPACE > /dev/null 2>&1; then
+        echo "Updating existing deployment..."
+        kubectl set image deployment/$DEPLOYMENT_NAME \
+          $DEPLOYMENT_NAME=$IMAGE \
+          -n $NAMESPACE
+        kubectl rollout status deployment/$DEPLOYMENT_NAME -n $NAMESPACE --timeout=5m
+      else
+        echo "Creating new deployment..."
+        kubectl create deployment $DEPLOYMENT_NAME \
+          --image=$IMAGE \
+          --replicas=$REPLICAS \
+          -n $NAMESPACE
+        kubectl expose deployment $DEPLOYMENT_NAME \
+          --port=80 \
+          --target-port=8080 \
+          -n $NAMESPACE || true
+      fi
+    - kubectl get pods -n $NAMESPACE -l app=$DEPLOYMENT_NAME
+  environment:
+    name: $NAMESPACE
+    kubernetes:
+      namespace: $NAMESPACE
+  tags:
+    - kubernetes
+
+# Deploy to development environment
+.deploy-dev:
+  extends: .k8s-deploy
+  variables:
+    NAMESPACE: "development"
+    REPLICAS: "1"
+  environment:
+    name: development
+    url: https://dev.$CI_PROJECT_NAME.homelab.local
+    on_stop: stop-dev
+  only:
+    - develop
+    - /^feature\/.*/
+
+# Deploy to staging environment
+.deploy-staging:
+  extends: .k8s-deploy
+  variables:
+    NAMESPACE: "staging"
+    REPLICAS: "2"
+  environment:
+    name: staging
+    url: https://staging.$CI_PROJECT_NAME.homelab.local
+    on_stop: stop-staging
+  only:
+    - main
+    - master
+
+# Deploy to production environment
+.deploy-production:
+  extends: .k8s-deploy
+  variables:
+    NAMESPACE: "production"
+    REPLICAS: "3"
+  environment:
+    name: production
+    url: https://$CI_PROJECT_NAME.homelab.local
+  when: manual
+  only:
+    - main
+    - master
+    - tags
+
+# Deploy review app (dynamic environment per MR)
+.deploy-review:
+  extends: .k8s-deploy
+  variables:
+    NAMESPACE: "review-$CI_MERGE_REQUEST_IID"
+    DEPLOYMENT_NAME: "$CI_PROJECT_NAME-review-$CI_MERGE_REQUEST_IID"
+    REPLICAS: "1"
+  before_script:
+    - echo "Creating review environment..."
+    - kubectl create namespace review-$CI_MERGE_REQUEST_IID || true
+    - kubectl label namespace review-$CI_MERGE_REQUEST_IID environment=review || true
+  script:
+    - kubectl config use-context homelab || true
+    - |
+      kubectl create deployment $DEPLOYMENT_NAME \
+        --image=$IMAGE \
+        --replicas=$REPLICAS \
+        -n $NAMESPACE || kubectl set image deployment/$DEPLOYMENT_NAME $DEPLOYMENT_NAME=$IMAGE -n $NAMESPACE
+    - |
+      kubectl expose deployment $DEPLOYMENT_NAME \
+        --port=80 \
+        --target-port=8080 \
+        --type=NodePort \
+        -n $NAMESPACE || true
+    - kubectl get svc $DEPLOYMENT_NAME -n $NAMESPACE
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    url: https://review-$CI_MERGE_REQUEST_IID.$CI_PROJECT_NAME.homelab.local
+    on_stop: stop-review
+    auto_stop_in: 1 week
+  only:
+    - merge_requests
+
+# Stop review app
+.stop-review:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  variables:
+    NAMESPACE: "review-$CI_MERGE_REQUEST_IID"
+    GIT_STRATEGY: none
+  script:
+    - echo "Cleaning up review environment..."
+    - kubectl delete namespace review-$CI_MERGE_REQUEST_IID || true
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+  when: manual
+  only:
+    - merge_requests
+
+# Deploy with Helm
+.deploy-helm:
+  extends: .k8s-deploy
+  image: alpine/helm:latest
+  variables:
+    CHART_PATH: "./helm"
+    RELEASE_NAME: "$CI_PROJECT_NAME"
+    NAMESPACE: "default"
+  script:
+    - echo "Deploying with Helm..."
+    - helm version
+    - |
+      helm upgrade --install $RELEASE_NAME $CHART_PATH \
+        --namespace $NAMESPACE \
+        --create-namespace \
+        --set image.repository=$CI_REGISTRY_IMAGE \
+        --set image.tag=$CI_COMMIT_SHA \
+        --wait \
+        --timeout 5m
+    - helm list -n $NAMESPACE
+
+# Deploy with kubectl apply
+.deploy-kubectl-apply:
+  extends: .k8s-deploy
+  variables:
+    MANIFESTS_PATH: "./k8s"
+  script:
+    - echo "Deploying with kubectl apply..."
+    - kubectl apply -f $MANIFESTS_PATH/ -n $NAMESPACE
+    - |
+      for deployment in $(kubectl get deployments -n $NAMESPACE -o name); do
+        kubectl rollout status $deployment -n $NAMESPACE --timeout=5m
+      done
+
+# Canary deployment
+.deploy-canary:
+  extends: .k8s-deploy
+  variables:
+    DEPLOYMENT_NAME: "$CI_PROJECT_NAME-canary"
+    REPLICAS: "1"
+  script:
+    - echo "Deploying canary version..."
+    - |
+      kubectl create deployment $DEPLOYMENT_NAME \
+        --image=$IMAGE \
+        --replicas=$REPLICAS \
+        -n $NAMESPACE || kubectl set image deployment/$DEPLOYMENT_NAME $DEPLOYMENT_NAME=$IMAGE -n $NAMESPACE
+    - kubectl label deployment $DEPLOYMENT_NAME version=canary -n $NAMESPACE --overwrite
+    - kubectl rollout status deployment/$DEPLOYMENT_NAME -n $NAMESPACE
+  environment:
+    name: $NAMESPACE-canary

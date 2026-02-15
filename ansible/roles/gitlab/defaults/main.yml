@@ -1,0 +1,169 @@
+---
+# GitLab Ansible Role - Default Variables
+# Override these in your playbook or inventory
+
+#=============================================================================
+# GENERAL CONFIGURATION
+#=============================================================================
+
+# GitLab release configuration
+gitlab_namespace: gitlab
+gitlab_release_name: gitlab
+gitlab_chart_repo: https://charts.gitlab.io/
+gitlab_chart_version: "7.7.0"  # Pin to specific version for reproducibility
+
+# Domain configuration
+gitlab_domain: gitlab.homelab.local
+gitlab_registry_domain: registry.gitlab.homelab.local
+gitlab_minio_domain: minio.gitlab.homelab.local
+
+# Edition: ce (Community Edition) or ee (Enterprise Edition)
+gitlab_edition: ce
+
+#=============================================================================
+# RESOURCE CONFIGURATION
+#=============================================================================
+
+# Webservice resources
+gitlab_webservice_replicas: 1
+gitlab_webservice_cpu_request: "500m"
+gitlab_webservice_cpu_limit: "2"
+gitlab_webservice_memory_request: "2Gi"
+gitlab_webservice_memory_limit: "4Gi"
+gitlab_webservice_workers: 2
+
+# Sidekiq resources
+gitlab_sidekiq_replicas: 1
+gitlab_sidekiq_cpu_request: "250m"
+gitlab_sidekiq_cpu_limit: "1"
+gitlab_sidekiq_memory_request: "1Gi"
+gitlab_sidekiq_memory_limit: "2Gi"
+
+# GitLab Shell resources
+gitlab_shell_cpu_request: "100m"
+gitlab_shell_cpu_limit: "200m"
+gitlab_shell_memory_request: "128Mi"
+gitlab_shell_memory_limit: "256Mi"
+
+# Gitaly resources
+gitlab_gitaly_cpu_request: "250m"
+gitlab_gitaly_cpu_limit: "1"
+gitlab_gitaly_memory_request: "512Mi"
+gitlab_gitaly_memory_limit: "1Gi"
+
+# Container Registry resources
+gitlab_registry_cpu_request: "100m"
+gitlab_registry_cpu_limit: "500m"
+gitlab_registry_memory_request: "256Mi"
+gitlab_registry_memory_limit: "512Mi"
+
+# PostgreSQL resources
+gitlab_postgresql_cpu_request: "250m"
+gitlab_postgresql_cpu_limit: "500m"
+gitlab_postgresql_memory_request: "512Mi"
+gitlab_postgresql_memory_limit: "1Gi"
+
+# Redis resources
+gitlab_redis_cpu_request: "100m"
+gitlab_redis_cpu_limit: "250m"
+gitlab_redis_memory_request: "256Mi"
+gitlab_redis_memory_limit: "512Mi"
+
+# MinIO resources
+gitlab_minio_cpu_request: "100m"
+gitlab_minio_cpu_limit: "500m"
+gitlab_minio_memory_request: "256Mi"
+gitlab_minio_memory_limit: "512Mi"
+
+#=============================================================================
+# STORAGE CONFIGURATION
+#=============================================================================
+
+# Storage class (must exist in cluster)
+gitlab_storage_class: local-path
+
+# PostgreSQL storage
+gitlab_postgresql_storage_size: "10Gi"
+
+# Redis storage
+gitlab_redis_storage_size: "5Gi"
+
+# Gitaly (Git repositories) storage
+gitlab_gitaly_storage_size: "50Gi"
+
+# MinIO (object storage) storage
+gitlab_minio_storage_size: "50Gi"
+
+#=============================================================================
+# INGRESS CONFIGURATION
+#=============================================================================
+
+# Ingress controller class
+gitlab_ingress_class: traefik
+
+# TLS configuration
+gitlab_tls_enabled: false  # Set to true when using cert-manager
+
+# Cert-manager integration
+gitlab_certmanager_enabled: false
+
+#=============================================================================
+# FEATURES CONFIGURATION
+#=============================================================================
+
+# Container Registry
+gitlab_registry_enabled: true
+
+# MinIO (bundled object storage)
+gitlab_minio_enabled: true
+
+# Prometheus monitoring (Phase 7)
+gitlab_prometheus_enabled: false
+
+# NGINX Ingress (disabled, using Traefik)
+gitlab_nginx_ingress_enabled: false
+
+#=============================================================================
+# DEPLOYMENT OPTIONS
+#=============================================================================
+
+# Helm deployment options
+gitlab_helm_timeout: "15m"
+gitlab_helm_wait: true
+
+# Force redeploy even if already installed
+gitlab_force_redeploy: false
+
+# Create namespace with ResourceQuota
+gitlab_create_namespace: true
+gitlab_resource_quota_enabled: true
+
+# Resource quota limits (for entire namespace)
+gitlab_quota_cpu_requests: "10"
+gitlab_quota_cpu_limits: "20"
+gitlab_quota_memory_requests: "20Gi"
+gitlab_quota_memory_limits: "40Gi"
+gitlab_quota_pvc_count: "10"
+
+#=============================================================================
+# POST-DEPLOYMENT CONFIGURATION
+#=============================================================================
+
+# Wait for GitLab to be ready
+gitlab_wait_for_ready: true
+gitlab_ready_timeout: 900  # 15 minutes
+
+# Display access information after deployment
+gitlab_show_access_info: true
+
+# Verify GitLab health endpoint
+gitlab_verify_health: true
+
+#=============================================================================
+# BACKUP CONFIGURATION
+#=============================================================================
+
+# Backup settings (for future automation)
+gitlab_backup_enabled: false
+gitlab_backup_schedule: "0 2 * * *"  # Daily at 2 AM
+gitlab_backup_retention: 7  # days

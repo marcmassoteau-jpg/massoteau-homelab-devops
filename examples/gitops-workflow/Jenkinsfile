@@ -1,0 +1,330 @@
+// =============================================================================
+// Jenkins Pipeline - Hybrid CI/CD + GitOps Workflow
+// =============================================================================
+//
+// This pipeline demonstrates the hybrid workflow:
+//   1. Jenkins: Build -> Test -> Package (Docker image)
+//   2. GitOps: Update manifests in Git -> ArgoCD syncs to cluster
+//
+// Stages:
+//   Build    - Install dependencies and build
+//   Test     - Run tests and linting (parallel)
+//   Package  - Build and push Docker image with Kaniko
+//   Update Dev Manifests - Update GitOps repo with new image tag
+//   Promote to Staging   - Manual trigger to promote to staging
+//   Promote to Production - Manual trigger to promote to production
+//
+// Required Credentials:
+//   - gitops-token: GitLab access token for pushing to GitOps repo
+//   - registry-credentials: Docker registry username/password
+//
+// =============================================================================
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: agent
+spec:
+  containers:
+  - name: python
+    image: python:3.11-slim
+    command:
+    - cat
+    tty: true
+  - name: alpine
+    image: alpine:3.18
+    command:
+    - cat
+    tty: true
+'''
+        }
+    }
+
+    environment {
+        // Application
+        APP_NAME = 'demo-app'
+        APP_DIR = 'demo-app'
+
+        // Container Registry
+        REGISTRY = 'registry.gitlab.homelab.local:30080'
+        IMAGE_NAME = "${REGISTRY}/${APP_NAME}"
+
+        // GitOps Repository
+        GITOPS_REPO = 'http://gitlab.homelab.local:30080/homelab/gitops.git'
+        GITOPS_BRANCH = 'main'
+        GITOPS_USER = 'root'
+
+        // Jenkins variables
+        GIT_COMMIT_SHORT = "${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        BRANCH_TAG = "${env.BRANCH_NAME?.replaceAll('/', '-') ?: 'main'}"
+    }
+
+    stages {
+        // =====================================================================
+        // STAGE 1: BUILD
+        // =====================================================================
+        stage('Build') {
+            steps {
+                container('python') {
+                    dir("${APP_DIR}") {
+                        sh '''
+                            pip install --cache-dir .cache/pip -r requirements.txt
+                            echo "Build successful"
+                        '''
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // STAGE 2: TEST (Parallel)
+        // =====================================================================
+        stage('Test') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        container('python') {
+                            dir("${APP_DIR}") {
+                                sh '''
+                                    pip install --cache-dir .cache/pip -r requirements.txt pytest pytest-cov
+                                    pytest test_app.py -v --cov=app --cov-report=term-missing
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Lint') {
+                    steps {
+                        container('python') {
+                            dir("${APP_DIR}") {
+                                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                                    sh '''
+                                        pip install flake8
+                                        flake8 app.py --max-line-length=120 --statistics
+                                    '''
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // STAGE 3: PACKAGE (Docker Build with Kaniko)
+        // =====================================================================
+        stage('Package') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
+            agent {
+                kubernetes {
+                    yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: kaniko
+spec:
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:v1.9.0-debug
+    command:
+    - /busybox/cat
+    tty: true
+    volumeMounts:
+    - name: docker-config
+      mountPath: /kaniko/.docker
+  volumes:
+  - name: docker-config
+    emptyDir: {}
+'''
+                }
+            }
+            steps {
+                container('kaniko') {
+                    script {
+                        withCredentials([usernamePassword(
+                            credentialsId: 'registry-credentials',
+                            usernameVariable: 'REGISTRY_USER',
+                            passwordVariable: 'REGISTRY_PASSWORD'
+                        )]) {
+                            sh """
+                                echo '{"auths":{"${REGISTRY}":{"auth":"'"\$(echo -n \${REGISTRY_USER}:\${REGISTRY_PASSWORD} | base64)"'"}}}' > /kaniko/.docker/config.json
+                                /kaniko/executor \
+                                    --context=\${WORKSPACE}/${APP_DIR} \
+                                    --dockerfile=\${WORKSPACE}/${APP_DIR}/Dockerfile \
+                                    --destination=${IMAGE_NAME}:${GIT_COMMIT_SHORT} \
+                                    --destination=${IMAGE_NAME}:${BRANCH_TAG}-latest \
+                                    --cache=true \
+                                    --cache-ttl=24h
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // STAGE 4: UPDATE DEV MANIFESTS (Automatic)
+        // =====================================================================
+        stage('Update Dev Manifests') {
+            when {
+                branch 'main'
+            }
+            steps {
+                container('alpine') {
+                    script {
+                        withCredentials([string(
+                            credentialsId: 'gitops-token',
+                            variable: 'GITOPS_TOKEN'
+                        )]) {
+                            sh '''
+                                # Install dependencies
+                                apk add --no-cache git curl
+
+                                # Install kustomize
+                                curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.3.0/kustomize_v5.3.0_linux_amd64.tar.gz" | tar xz
+                                mv kustomize /usr/local/bin/
+
+                                echo "Updating dev manifests with image ${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
+
+                                # Clone GitOps repository
+                                REPO_URL=$(echo ${GITOPS_REPO} | sed "s|http://|http://${GITOPS_USER}:${GITOPS_TOKEN}@|")
+                                git clone ${REPO_URL} /tmp/gitops
+                                cd /tmp/gitops
+
+                                # Update dev environment image tag
+                                cd environments/dev/demo-app
+                                kustomize edit set image ${IMAGE_NAME}:${GIT_COMMIT_SHORT}
+
+                                # Commit and push
+                                git config user.email "jenkins@homelab.local"
+                                git config user.name "Jenkins CI"
+                                git add .
+                                git diff --cached --quiet || git commit -m "Update dev image to ${GIT_COMMIT_SHORT} [skip ci]"
+                                git push origin ${GITOPS_BRANCH}
+
+                                echo "Dev manifests updated. ArgoCD will sync automatically."
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // STAGE 5: PROMOTE TO STAGING (Manual)
+        // =====================================================================
+        stage('Promote to Staging') {
+            when {
+                branch 'main'
+            }
+            steps {
+                input message: 'Deploy to staging?', ok: 'Promote'
+                container('alpine') {
+                    script {
+                        withCredentials([string(
+                            credentialsId: 'gitops-token',
+                            variable: 'GITOPS_TOKEN'
+                        )]) {
+                            sh '''
+                                # Install dependencies
+                                apk add --no-cache git curl
+                                curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.3.0/kustomize_v5.3.0_linux_amd64.tar.gz" | tar xz
+                                mv kustomize /usr/local/bin/
+
+                                echo "Promoting ${GIT_COMMIT_SHORT} to staging"
+
+                                # Clone GitOps repository
+                                REPO_URL=$(echo ${GITOPS_REPO} | sed "s|http://|http://${GITOPS_USER}:${GITOPS_TOKEN}@|")
+                                git clone ${REPO_URL} /tmp/gitops
+                                cd /tmp/gitops/environments/staging/demo-app
+
+                                # Update staging environment
+                                kustomize edit set image ${IMAGE_NAME}:${GIT_COMMIT_SHORT}
+
+                                # Commit and push
+                                git config user.email "jenkins@homelab.local"
+                                git config user.name "Jenkins CI"
+                                git add .
+                                git diff --cached --quiet || git commit -m "Promote ${GIT_COMMIT_SHORT} to staging [skip ci]"
+                                git push origin ${GITOPS_BRANCH}
+
+                                echo "Staging manifests updated. ArgoCD will sync automatically."
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // STAGE 6: PROMOTE TO PRODUCTION (Manual with Approval)
+        // =====================================================================
+        stage('Promote to Production') {
+            when {
+                branch 'main'
+            }
+            steps {
+                input message: 'Deploy to production? This will update the production environment.', ok: 'Release to Production'
+                container('alpine') {
+                    script {
+                        withCredentials([string(
+                            credentialsId: 'gitops-token',
+                            variable: 'GITOPS_TOKEN'
+                        )]) {
+                            sh '''
+                                # Install dependencies
+                                apk add --no-cache git curl
+                                curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.3.0/kustomize_v5.3.0_linux_amd64.tar.gz" | tar xz
+                                mv kustomize /usr/local/bin/
+
+                                echo "Promoting ${GIT_COMMIT_SHORT} to production"
+
+                                # Clone GitOps repository
+                                REPO_URL=$(echo ${GITOPS_REPO} | sed "s|http://|http://${GITOPS_USER}:${GITOPS_TOKEN}@|")
+                                git clone ${REPO_URL} /tmp/gitops
+                                cd /tmp/gitops/environments/prod/demo-app
+
+                                # Update production environment (use tag if available, otherwise commit SHA)
+                                IMAGE_TAG=${GIT_TAG_NAME:-${GIT_COMMIT_SHORT}}
+                                kustomize edit set image ${IMAGE_NAME}:${IMAGE_TAG}
+
+                                # Commit and push
+                                git config user.email "jenkins@homelab.local"
+                                git config user.name "Jenkins CI"
+                                git add .
+                                git diff --cached --quiet || git commit -m "Release ${IMAGE_TAG} to production [skip ci]"
+                                git push origin ${GITOPS_BRANCH}
+
+                                echo "Production manifests updated. ArgoCD will sync automatically."
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Check logs for details.'
+        }
+    }
+}

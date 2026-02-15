@@ -1,0 +1,99 @@
+# Node.js Application Pipeline
+# Demonstrates template usage for a Node.js/Express application
+
+include:
+  - project: 'homelab/cicd-templates'
+    ref: main
+    file:
+      - 'templates/.build-template.yml'
+      - 'templates/.test-template.yml'
+      - 'templates/.security-scan.yml'
+      - 'templates/.docker-build.yml'
+      - 'templates/.k8s-deploy.yml'
+
+stages:
+  - build
+  - test
+  - security
+  - package
+  - deploy
+
+variables:
+  NODE_VERSION: "18"
+  APP_NAME: "node-demo-app"
+
+# Build the application
+build:
+  extends: .build-node
+  variables:
+    BUILD_COMMAND: "npm ci && npm run build"
+    BUILD_OUTPUT_DIR: "dist"
+
+# Run unit tests
+test-unit:
+  extends: .test-node
+  variables:
+    TEST_COMMAND: "npm ci && npm run test:unit -- --coverage"
+  needs: ["build"]
+
+# Run linting
+lint:
+  extends: .test-node
+  variables:
+    TEST_COMMAND: "npm ci && npm run lint"
+  needs: []
+  allow_failure: true
+
+# Security scanning
+scan-dependencies:
+  extends: .scan-dependencies
+  image: node:18-alpine
+  script:
+    - npm ci
+    - npm audit --audit-level=moderate --json > npm-audit.json || true
+    - npm audit --audit-level=moderate
+  artifacts:
+    reports:
+      dependency_scanning: npm-audit.json
+  needs: []
+
+scan-secrets:
+  extends: .scan-secrets
+  needs: []
+
+# Build Docker image
+docker-build:
+  extends: .docker-build
+  variables:
+    DOCKERFILE_PATH: "Dockerfile"
+  needs:
+    - build
+    - test-unit
+
+# Scan container
+scan-container:
+  extends: .scan-trivy-image
+  needs: ["docker-build"]
+
+# Deploy to dev
+deploy-dev:
+  extends: .deploy-dev
+  needs: ["docker-build"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+# Deploy review app
+deploy-review:
+  extends: .deploy-review
+  needs: ["docker-build"]
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+
+# Deploy to production
+deploy-prod:
+  extends: .deploy-production
+  needs:
+    - docker-build
+    - scan-container
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"

@@ -1,0 +1,18 @@
+---
+# Direct access to blue deployment (for testing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app-blue
+  labels:
+    app: demo-app
+    version: blue
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    app: demo-app
+    version: blue

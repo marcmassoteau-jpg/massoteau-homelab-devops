@@ -1,0 +1,14 @@
+---
+# ArgoCD Role - Handlers
+
+- name: Restart ArgoCD server
+  command: kubectl rollout restart deployment argocd-server -n {{ argocd_namespace }}
+  listen: "restart argocd"
+
+- name: Restart ArgoCD repo server
+  command: kubectl rollout restart deployment argocd-repo-server -n {{ argocd_namespace }}
+  listen: "restart argocd"
+
+- name: Restart ArgoCD controller
+  command: kubectl rollout restart statefulset argocd-application-controller -n {{ argocd_namespace }}
+  listen: "restart argocd"

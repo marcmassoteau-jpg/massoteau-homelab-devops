@@ -1,0 +1,58 @@
+# Ingress for Production Service
+# Exposes the production service (which routes to active environment)
+# Can also expose blue/green services directly for testing
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: myapp-ingress
+  namespace: production
+  annotations:
+    kubernetes.io/ingress.class: "traefik"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  labels:
+    app: myapp
+spec:
+  rules:
+  # Production traffic (goes to active environment)
+  - host: myapp.homelab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myapp-production
+            port:
+              number: 80
+
+  # Direct access to blue environment for testing
+  - host: myapp-blue.homelab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myapp-blue
+            port:
+              number: 80
+
+  # Direct access to green environment for testing
+  - host: myapp-green.homelab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myapp-green
+            port:
+              number: 80
+
+  tls:
+  - hosts:
+    - myapp.homelab.local
+    - myapp-blue.homelab.local
+    - myapp-green.homelab.local
+    secretName: myapp-tls

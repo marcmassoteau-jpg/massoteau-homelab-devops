@@ -1,0 +1,363 @@
+---
+# GitLab Deployment Role - Main Tasks
+# Deploys GitLab Community Edition on Kubernetes using Helm
+
+#=============================================================================
+# PRE-FLIGHT CHECKS
+#=============================================================================
+
+- name: Check if kubectl is available
+  command: kubectl version --client --short
+  register: kubectl_version
+  changed_when: false
+  failed_when: kubectl_version.rc != 0
+
+- name: Check if Helm is available
+  command: helm version --short
+  register: helm_version
+  changed_when: false
+  failed_when: helm_version.rc != 0
+
+- name: Verify Kubernetes cluster connectivity
+  command: kubectl cluster-info
+  register: cluster_info
+  changed_when: false
+  failed_when: cluster_info.rc != 0
+
+- name: Check if storage class exists
+  command: "kubectl get storageclass {{ gitlab_storage_class }}"
+  register: storage_class_check
+  changed_when: false
+  failed_when: false
+
+- name: Warn if storage class not found
+  debug:
+    msg: "WARNING: Storage class '{{ gitlab_storage_class }}' not found. GitLab deployment may fail."
+  when: storage_class_check.rc != 0
+
+- name: Display pre-flight check summary
+  debug:
+    msg:
+      - "✓ kubectl: {{ kubectl_version.stdout }}"
+      - "✓ helm: {{ helm_version.stdout }}"
+      - "✓ Cluster: Connected"
+      - "✓ Storage class: {{ gitlab_storage_class }}"
+
+#=============================================================================
+# NAMESPACE CREATION
+#=============================================================================
+
+- name: Check if GitLab namespace exists
+  command: "kubectl get namespace {{ gitlab_namespace }}"
+  register: namespace_check
+  changed_when: false
+  failed_when: false
+
+- name: Create GitLab namespace
+  when: namespace_check.rc != 0 and gitlab_create_namespace
+  block:
+    - name: Create namespace manifest
+      copy:
+        dest: /tmp/gitlab-namespace.yaml
+        content: |
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: {{ gitlab_namespace }}
+            labels:
+              name: {{ gitlab_namespace }}
+              app.kubernetes.io/name: gitlab
+              app.kubernetes.io/component: git-server
+              app.kubernetes.io/part-of: devops-platform
+              environment: homelab
+            annotations:
+              description: "GitLab self-hosted Git server and CI/CD platform"
+              phase: "4"
+              managed-by: ansible
+        mode: '0644'
+
+    - name: Apply namespace
+      command: kubectl apply -f /tmp/gitlab-namespace.yaml
+      register: namespace_create
+      changed_when: "'created' in namespace_create.stdout"
+
+    - name: Display namespace creation result
+      debug:
+        msg: "Namespace '{{ gitlab_namespace }}' created successfully"
+
+- name: Create ResourceQuota for namespace
+  when: gitlab_resource_quota_enabled
+  block:
+    - name: Create ResourceQuota manifest
+      copy:
+        dest: /tmp/gitlab-resource-quota.yaml
+        content: |
+          ---
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: gitlab-quota
+            namespace: {{ gitlab_namespace }}
+          spec:
+            hard:
+              requests.cpu: "{{ gitlab_quota_cpu_requests }}"
+              requests.memory: "{{ gitlab_quota_memory_requests }}"
+              limits.cpu: "{{ gitlab_quota_cpu_limits }}"
+              limits.memory: "{{ gitlab_quota_memory_limits }}"
+              persistentvolumeclaims: "{{ gitlab_quota_pvc_count }}"
+        mode: '0644'
+
+    - name: Apply ResourceQuota
+      command: kubectl apply -f /tmp/gitlab-resource-quota.yaml
+      register: quota_create
+      changed_when: "'created' in quota_create.stdout or 'configured' in quota_create.stdout"
+
+#=============================================================================
+# HELM REPOSITORY SETUP
+#=============================================================================
+
+- name: Add GitLab Helm repository
+  command: "helm repo add gitlab {{ gitlab_chart_repo }}"
+  register: helm_repo_add
+  changed_when: "'has been added' in helm_repo_add.stdout"
+  failed_when: false
+
+- name: Update Helm repositories
+  command: helm repo update
+  register: helm_repo_update
+  changed_when: false
+
+- name: Verify GitLab chart is available
+  command: "helm search repo gitlab/gitlab --version {{ gitlab_chart_version }}"
+  register: chart_search
+  changed_when: false
+  failed_when: chart_search.rc != 0
+
+- name: Display available chart
+  debug:
+    msg: "✓ GitLab chart {{ gitlab_chart_version }} is available"
+
+#=============================================================================
+# CHECK EXISTING DEPLOYMENT
+#=============================================================================
+
+- name: Check if GitLab is already deployed
+  command: "helm list -n {{ gitlab_namespace }} -o json"
+  register: helm_list
+  changed_when: false
+  failed_when: false
+
+- name: Parse Helm list output
+  set_fact:
+    gitlab_deployed: "{{ (helm_list.stdout | from_json | selectattr('name', 'equalto', gitlab_release_name) | list | length > 0) }}"
+
+- name: Display deployment status
+  debug:
+    msg: "GitLab deployment status: {{ 'Already deployed' if gitlab_deployed else 'Not deployed' }}"
+
+#=============================================================================
+# GENERATE HELM VALUES
+#=============================================================================
+
+- name: Create GitLab Helm values from template
+  template:
+    src: gitlab-values.yaml.j2
+    dest: /tmp/gitlab-values.yaml
+    mode: '0644'
+  register: values_template
+
+- name: Display values file location
+  debug:
+    msg: "GitLab values file created at: /tmp/gitlab-values.yaml"
+
+- name: Validate Helm values syntax
+  command: "helm template {{ gitlab_release_name }} gitlab/gitlab --version {{ gitlab_chart_version }} --values /tmp/gitlab-values.yaml"
+  register: helm_template_test
+  changed_when: false
+  failed_when: helm_template_test.rc != 0
+
+- name: Display validation result
+  debug:
+    msg: "✓ Helm values syntax is valid"
+
+#=============================================================================
+# DEPLOY OR UPGRADE GITLAB
+#=============================================================================
+
+- name: Deploy GitLab (initial installation)
+  when: not gitlab_deployed or gitlab_force_redeploy
+  block:
+    - name: Install GitLab via Helm
+      command: >
+        helm install {{ gitlab_release_name }} gitlab/gitlab
+        --namespace {{ gitlab_namespace }}
+        --create-namespace
+        --version {{ gitlab_chart_version }}
+        --values /tmp/gitlab-values.yaml
+        --timeout {{ gitlab_helm_timeout }}
+        {{ '--wait' if gitlab_helm_wait else '' }}
+      register: helm_install
+      async: 1200  # 20 minutes max
+      poll: 30
+
+    - name: Display installation progress
+      debug:
+        msg: "GitLab installation in progress... This may take 10-15 minutes."
+
+- name: Upgrade GitLab (if already deployed and not force redeploying)
+  when: gitlab_deployed and not gitlab_force_redeploy
+  block:
+    - name: Upgrade GitLab via Helm
+      command: >
+        helm upgrade {{ gitlab_release_name }} gitlab/gitlab
+        --namespace {{ gitlab_namespace }}
+        --version {{ gitlab_chart_version }}
+        --values /tmp/gitlab-values.yaml
+        --timeout {{ gitlab_helm_timeout }}
+        {{ '--wait' if gitlab_helm_wait else '' }}
+      register: helm_upgrade
+      async: 1200
+      poll: 30
+
+    - name: Display upgrade result
+      debug:
+        msg: "GitLab upgraded successfully"
+
+#=============================================================================
+# WAIT FOR DEPLOYMENT TO BE READY
+#=============================================================================
+
+- name: Wait for GitLab pods to be Running
+  when: gitlab_wait_for_ready
+  block:
+    - name: Wait for webservice pods
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -l app=webservice
+        -n {{ gitlab_namespace }}
+        --timeout={{ gitlab_ready_timeout }}s
+      register: webservice_ready
+      retries: 3
+      delay: 30
+      until: webservice_ready.rc == 0
+      failed_when: false
+
+    - name: Check all GitLab pods status
+      command: "kubectl get pods -n {{ gitlab_namespace }}"
+      register: all_pods
+      changed_when: false
+
+    - name: Display pod status
+      debug:
+        var: all_pods.stdout_lines
+
+#=============================================================================
+# POST-DEPLOYMENT VERIFICATION
+#=============================================================================
+
+- name: Get initial root password
+  when: gitlab_show_access_info
+  block:
+    - name: Wait for initial root password secret
+      command: >
+        kubectl get secret gitlab-gitlab-initial-root-password
+        -n {{ gitlab_namespace }}
+        -o jsonpath="{.data.password}"
+      register: root_password_b64
+      retries: 10
+      delay: 10
+      until: root_password_b64.rc == 0
+      failed_when: false
+
+    - name: Decode root password
+      set_fact:
+        gitlab_root_password: "{{ root_password_b64.stdout | b64decode }}"
+      when: root_password_b64.rc == 0
+
+    - name: Display access information
+      debug:
+        msg:
+          - "════════════════════════════════════════════════════════"
+          - "  GitLab Deployment Completed Successfully!"
+          - "════════════════════════════════════════════════════════"
+          - ""
+          - "Access Information:"
+          - "  URL: http://{{ gitlab_domain }}:30080"
+          - "  Username: root"
+          - "  Password: {{ gitlab_root_password | default('Check secret manually') }}"
+          - ""
+          - "Container Registry:"
+          - "  URL: http://{{ gitlab_registry_domain }}:30080"
+          - ""
+          - "MinIO Console:"
+          - "  URL: http://{{ gitlab_minio_domain }}:30080"
+          - ""
+          - "IMPORTANT: Change the root password after first login!"
+          - "════════════════════════════════════════════════════════"
+      when: root_password_b64.rc == 0
+
+- name: Verify GitLab health endpoint
+  when: gitlab_verify_health
+  block:
+    - name: Check GitLab health
+      uri:
+        url: "http://{{ gitlab_domain }}:30080/-/health"
+        status_code: 200
+      register: health_check
+      retries: 10
+      delay: 30
+      until: health_check.status == 200
+      failed_when: false
+
+    - name: Display health check result
+      debug:
+        msg: "✓ GitLab health endpoint is responding"
+      when: health_check.status == 200
+
+    - name: Warn if health check failed
+      debug:
+        msg: "⚠ GitLab health endpoint not responding yet. May need more time to start."
+      when: health_check.status != 200
+
+#=============================================================================
+# DISPLAY SUMMARY
+#=============================================================================
+
+- name: Get deployment summary
+  command: "helm list -n {{ gitlab_namespace }}"
+  register: helm_list_final
+  changed_when: false
+
+- name: Display deployment summary
+  debug:
+    msg:
+      - "GitLab Deployment Summary:"
+      - "  Release: {{ gitlab_release_name }}"
+      - "  Namespace: {{ gitlab_namespace }}"
+      - "  Chart Version: {{ gitlab_chart_version }}"
+      - "  Edition: {{ gitlab_edition | upper }}"
+      - ""
+      - "{{ helm_list_final.stdout_lines }}"
+
+- name: Get PVC status
+  command: "kubectl get pvc -n {{ gitlab_namespace }}"
+  register: pvc_status
+  changed_when: false
+
+- name: Display storage status
+  debug:
+    msg: "{{ pvc_status.stdout_lines }}"
+
+- name: Display next steps
+  debug:
+    msg:
+      - ""
+      - "Next Steps:"
+      - "  1. Access GitLab at http://{{ gitlab_domain }}:30080"
+      - "  2. Login with username 'root' and the password shown above"
+      - "  3. Change the root password immediately"
+      - "  4. Create your first project"
+      - "  5. Deploy GitLab Runner for CI/CD (Article 14)"
+      - ""
+      - "For more information, see Article 13 in docs/articles/"

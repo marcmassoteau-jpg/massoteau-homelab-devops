@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: canary-test
+  labels:
+    name: canary-test
+    test: integration-3

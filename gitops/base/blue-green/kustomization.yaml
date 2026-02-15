@@ -1,0 +1,14 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment-blue.yaml
+  - deployment-green.yaml
+  - service-production.yaml
+  - service-blue.yaml
+  - service-green.yaml
+
+commonLabels:
+  app.kubernetes.io/managed-by: argocd
+  deployment-strategy: blue-green

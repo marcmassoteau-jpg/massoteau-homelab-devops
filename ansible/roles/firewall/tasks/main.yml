@@ -47,7 +47,7 @@
     proto: tcp
     comment: 'Kubernetes API server'
   become: true
-  when: k8s_control_plane | default(false)
+  when: firewall_k8s_control_plane | default(false)
 
 - name: Enable UFW
   community.general.ufw:

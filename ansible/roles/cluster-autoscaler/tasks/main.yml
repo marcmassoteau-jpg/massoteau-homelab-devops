@@ -1,0 +1,410 @@
+---
+# Cluster Autoscaler Deployment Role - Main Tasks
+# Deploys a custom Proxmox-based cluster autoscaler on Kubernetes
+
+#=============================================================================
+# PRE-FLIGHT CHECKS
+#=============================================================================
+
+- name: Check if kubectl is available
+  ansible.builtin.command: kubectl version --client --short
+  register: kubectl_version
+  changed_when: false
+  failed_when: kubectl_version.rc != 0
+
+- name: Check if Helm is available
+  ansible.builtin.command: helm version --short
+  register: helm_version
+  changed_when: false
+  failed_when: helm_version.rc != 0
+
+- name: Verify Kubernetes cluster connectivity
+  ansible.builtin.command: kubectl cluster-info
+  register: cluster_info
+  changed_when: false
+  failed_when: cluster_info.rc != 0
+
+- name: Get current node count
+  ansible.builtin.shell: |
+    kubectl get nodes --no-headers | wc -l
+  register: current_node_count
+  changed_when: false
+
+- name: Display pre-flight check summary
+  ansible.builtin.debug:
+    msg:
+      - "Pre-flight checks passed:"
+      - "  kubectl: {{ kubectl_version.stdout }}"
+      - "  helm: {{ helm_version.stdout }}"
+      - "  Cluster: Connected"
+      - "  Current nodes: {{ current_node_count.stdout | trim }}"
+
+#=============================================================================
+# METRICS SERVER
+#=============================================================================
+
+- name: Check if metrics-server is deployed
+  ansible.builtin.command: kubectl get deployment metrics-server -n kube-system
+  register: metrics_server_check
+  changed_when: false
+  failed_when: false
+
+- name: Deploy metrics-server if not present
+  when: metrics_server_check.rc != 0
+  block:
+    - name: Add metrics-server Helm repository
+      ansible.builtin.command: helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+      register: metrics_repo_add
+      changed_when: "'has been added' in metrics_repo_add.stdout"
+      failed_when: false
+
+    - name: Update Helm repositories
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: Install metrics-server via Helm
+      ansible.builtin.command: >
+        helm install metrics-server metrics-server/metrics-server
+        --namespace kube-system
+        --set args[0]=--kubelet-insecure-tls
+        --set args[1]=--kubelet-preferred-address-types=InternalIP
+        --set resources.requests.cpu=50m
+        --set resources.requests.memory=64Mi
+        --set resources.limits.cpu=200m
+        --set resources.limits.memory=256Mi
+        --version {{ cluster_autoscaler_metrics_server_version }}
+      register: metrics_install
+      async: 300
+      poll: 10
+
+    - name: Wait for metrics-server to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=metrics-server
+        -n kube-system
+        --timeout=120s
+      register: metrics_ready
+      retries: 3
+      delay: 10
+      until: metrics_ready.rc == 0
+
+    - name: Display metrics-server installation result
+      ansible.builtin.debug:
+        msg: "metrics-server installed successfully"
+
+- name: Display metrics-server status
+  when: metrics_server_check.rc == 0
+  ansible.builtin.debug:
+    msg: "metrics-server is already deployed"
+
+#=============================================================================
+# NAMESPACE
+#=============================================================================
+
+- name: Check if autoscaling namespace exists
+  ansible.builtin.command: "kubectl get namespace {{ cluster_autoscaler_namespace }}"
+  register: namespace_check
+  changed_when: false
+  failed_when: false
+
+- name: Create autoscaling namespace
+  when: namespace_check.rc != 0
+  block:
+    - name: Create namespace manifest
+      ansible.builtin.copy:
+        dest: /tmp/autoscaler-namespace.yaml
+        content: |
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: {{ cluster_autoscaler_namespace }}
+            labels:
+              name: {{ cluster_autoscaler_namespace }}
+              app.kubernetes.io/name: cluster-autoscaler
+              app.kubernetes.io/component: autoscaling
+              app.kubernetes.io/part-of: devops-platform
+              environment: homelab
+            annotations:
+              description: "Custom Proxmox-based cluster autoscaler"
+              phase: "article-22"
+              managed-by: ansible
+        mode: '0644'
+
+    - name: Apply namespace
+      ansible.builtin.command: kubectl apply -f /tmp/autoscaler-namespace.yaml
+      register: namespace_create
+      changed_when: "'created' in namespace_create.stdout"
+
+    - name: Display namespace creation result
+      ansible.builtin.debug:
+        msg: "Namespace '{{ cluster_autoscaler_namespace }}' created successfully"
+
+#=============================================================================
+# RBAC
+#=============================================================================
+
+- name: Create RBAC resources from template
+  ansible.builtin.template:
+    src: autoscaler-rbac.yaml.j2
+    dest: /tmp/autoscaler-rbac.yaml
+    mode: '0644'
+
+- name: Apply RBAC resources
+  ansible.builtin.command: kubectl apply -f /tmp/autoscaler-rbac.yaml
+  register: rbac_apply
+  changed_when: "'created' in rbac_apply.stdout or 'configured' in rbac_apply.stdout"
+
+- name: Display RBAC status
+  ansible.builtin.debug:
+    msg: "RBAC resources applied (ServiceAccount, ClusterRole, ClusterRoleBinding)"
+
+#=============================================================================
+# CONFIGMAP
+#=============================================================================
+
+- name: Create Proxmox configuration ConfigMap from template
+  ansible.builtin.template:
+    src: autoscaler-configmap.yaml.j2
+    dest: /tmp/autoscaler-configmap.yaml
+    mode: '0644'
+  notify: restart autoscaler
+
+- name: Apply ConfigMap
+  ansible.builtin.command: kubectl apply -f /tmp/autoscaler-configmap.yaml
+  register: configmap_apply
+  changed_when: "'created' in configmap_apply.stdout or 'configured' in configmap_apply.stdout"
+
+- name: Display ConfigMap status
+  ansible.builtin.debug:
+    msg: "Proxmox autoscaler configuration applied"
+
+#=============================================================================
+# AUTOSCALER DEPLOYMENT
+#=============================================================================
+
+- name: Create scale-up CronJob from template
+  ansible.builtin.template:
+    src: autoscaler-cronjob.yaml.j2
+    dest: /tmp/autoscaler-cronjob.yaml
+    mode: '0644'
+
+- name: Apply scale-up CronJob
+  ansible.builtin.command: kubectl apply -f /tmp/autoscaler-cronjob.yaml
+  register: cronjob_apply
+  changed_when: "'created' in cronjob_apply.stdout or 'configured' in cronjob_apply.stdout"
+
+- name: Create scale-down CronJob from template
+  ansible.builtin.template:
+    src: scale-down-cronjob.yaml.j2
+    dest: /tmp/scale-down-cronjob.yaml
+    mode: '0644'
+
+- name: Apply scale-down CronJob
+  ansible.builtin.command: kubectl apply -f /tmp/scale-down-cronjob.yaml
+  register: scaledown_apply
+  changed_when: "'created' in scaledown_apply.stdout or 'configured' in scaledown_apply.stdout"
+
+- name: Display autoscaler deployment status
+  ansible.builtin.debug:
+    msg:
+      - "Autoscaler CronJobs deployed:"
+      - "  Scale-up check: {{ cluster_autoscaler_check_interval }}"
+      - "  Scale-down check: {{ cluster_autoscaler_scale_down_interval }}"
+
+#=============================================================================
+# HPA EXAMPLES
+#=============================================================================
+
+- name: Deploy HPA example resources
+  when: cluster_autoscaler_deploy_hpa_examples
+  block:
+    - name: Create example webapp HPA manifest
+      ansible.builtin.copy:
+        dest: /tmp/autoscaler-hpa-example.yaml
+        content: |
+          ---
+          # Example webapp deployment for HPA demonstration
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: webapp-example
+            namespace: default
+            labels:
+              app: webapp-example
+              purpose: hpa-demo
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: webapp-example
+            template:
+              metadata:
+                labels:
+                  app: webapp-example
+              spec:
+                containers:
+                  - name: webapp
+                    image: nginx:1.25-alpine
+                    ports:
+                      - containerPort: 80
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 64Mi
+                      limits:
+                        cpu: 250m
+                        memory: 128Mi
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: webapp-example
+            namespace: default
+          spec:
+            selector:
+              app: webapp-example
+            ports:
+              - port: 80
+                targetPort: 80
+          ---
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: webapp-example-hpa
+            namespace: default
+            labels:
+              app: webapp-example
+              purpose: hpa-demo
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: webapp-example
+            minReplicas: 2
+            maxReplicas: 10
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 70
+            behavior:
+              scaleUp:
+                stabilizationWindowSeconds: 60
+                policies:
+                  - type: Pods
+                    value: 2
+                    periodSeconds: 60
+              scaleDown:
+                stabilizationWindowSeconds: 300
+                policies:
+                  - type: Pods
+                    value: 1
+                    periodSeconds: 120
+        mode: '0644'
+
+    - name: Apply HPA example resources
+      ansible.builtin.command: kubectl apply -f /tmp/autoscaler-hpa-example.yaml
+      register: hpa_apply
+      changed_when: "'created' in hpa_apply.stdout or 'configured' in hpa_apply.stdout"
+
+    - name: Display HPA example status
+      ansible.builtin.debug:
+        msg: "HPA example resources deployed (webapp-example with autoscaling 2-10 replicas)"
+
+#=============================================================================
+# VERIFICATION
+#=============================================================================
+
+- name: Verify autoscaler components
+  block:
+    - name: Check CronJobs in autoscaling namespace
+      ansible.builtin.command: "kubectl get cronjobs -n {{ cluster_autoscaler_namespace }}"
+      register: cronjobs_status
+      changed_when: false
+
+    - name: Display CronJob status
+      ansible.builtin.debug:
+        var: cronjobs_status.stdout_lines
+
+    - name: Check ConfigMap exists
+      ansible.builtin.command: >
+        kubectl get configmap cluster-autoscaler-config
+        -n {{ cluster_autoscaler_namespace }}
+      register: configmap_check
+      changed_when: false
+
+    - name: Check RBAC resources
+      ansible.builtin.command: >
+        kubectl get clusterrole cluster-autoscaler-role
+      register: rbac_check
+      changed_when: false
+
+    - name: Check metrics-server is providing data
+      ansible.builtin.command: kubectl top nodes
+      register: metrics_data
+      changed_when: false
+      failed_when: false
+      retries: 3
+      delay: 15
+      until: metrics_data.rc == 0
+
+    - name: Display metrics data
+      ansible.builtin.debug:
+        var: metrics_data.stdout_lines
+      when: metrics_data.rc == 0
+
+    - name: Warn if metrics not yet available
+      ansible.builtin.debug:
+        msg: "WARNING: metrics-server data not yet available. It may take a few minutes to collect initial metrics."
+      when: metrics_data.rc != 0
+
+#=============================================================================
+# SUMMARY
+#=============================================================================
+
+- name: Display deployment summary
+  ansible.builtin.debug:
+    msg:
+      - "================================================================"
+      - "  Cluster Autoscaler Deployment Summary"
+      - "================================================================"
+      - ""
+      - "Components deployed:"
+      - "  - metrics-server (kube-system namespace)"
+      - "  - Autoscaler RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)"
+      - "  - Proxmox ConfigMap (API endpoint, node specs, IP range)"
+      - "  - Scale-up CronJob (checks every 2 minutes for pending pods)"
+      - "  - Scale-down CronJob (checks every 5 minutes for underutilized nodes)"
+      - "{{ '  - HPA example (webapp-example with 2-10 replicas)' if cluster_autoscaler_deploy_hpa_examples else '' }}"
+      - ""
+      - "Configuration:"
+      - "  Namespace: {{ cluster_autoscaler_namespace }}"
+      - "  Min nodes: {{ cluster_autoscaler_min_nodes }}"
+      - "  Max nodes: {{ cluster_autoscaler_max_nodes }}"
+      - "  Scale-up threshold: {{ cluster_autoscaler_scale_up_threshold }}% CPU"
+      - "  Scale-down threshold: {{ cluster_autoscaler_scale_down_threshold }}% CPU"
+      - "  Scale-down delay: {{ cluster_autoscaler_scale_down_delay }}s"
+      - "  Autoscale IP range: {{ cluster_autoscaler_ip_range_start }} - {{ cluster_autoscaler_ip_range_end }}"
+      - ""
+      - "Proxmox:"
+      - "  API: {{ cluster_autoscaler_proxmox_api_url }}"
+      - "  Node: {{ cluster_autoscaler_proxmox_node }}"
+      - "  Template ID: {{ cluster_autoscaler_vm_template_id }}"
+      - ""
+
+- name: Display next steps
+  ansible.builtin.debug:
+    msg:
+      - ""
+      - "Next Steps:"
+      - "  1. Configure Proxmox API credentials in the autoscaler secret"
+      - "  2. Verify the VM template (ID {{ cluster_autoscaler_vm_template_id }}) exists on Proxmox"
+      - "  3. Test scale-up: scripts/autoscaling/test-scale-up.sh"
+      - "  4. Test scale-down: scripts/autoscaling/test-scale-down.sh"
+      - "  5. Monitor with: kubectl get cronjobs -n {{ cluster_autoscaler_namespace }}"
+      - ""
+      - "For more information, see Article 22 in docs/articles/"
+      - ""

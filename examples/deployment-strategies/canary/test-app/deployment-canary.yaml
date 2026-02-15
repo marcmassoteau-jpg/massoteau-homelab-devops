@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-canary
+  namespace: canary-test
+  labels:
+    app: myapp
+    version: canary
+    test: integration-3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: myapp
+        version: canary
+        track: canary
+    spec:
+      containers:
+      - name: myapp
+        image: python:3.11-slim
+        command: ["python3", "-c"]
+        args:
+          - |
+            from http.server import HTTPServer, BaseHTTPRequestHandler
+            import json, os, time
+            from datetime import datetime
+
+            VERSION = "v2.0.0-canary"
+            REQUEST_COUNT = 0
+            START_TIME = time.time()
+
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, format, *args): pass
+                def do_GET(self):
+                    global REQUEST_COUNT
+                    REQUEST_COUNT += 1
+                    if self.path == '/health' or self.path == '/ready':
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'status': 'healthy', 'version': VERSION}).encode())
+                    elif self.path == '/metrics':
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/plain')
+                        self.end_headers()
+                        self.wfile.write(f'http_requests_total{{version="{VERSION}"}} {REQUEST_COUNT}\n'.encode())
+                    else:
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'version': VERSION, 'requests': REQUEST_COUNT}).encode())
+
+            HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+        ports:
+        - name: http
+          containerPort: 8080
+        - name: metrics
+          containerPort: 9090
+        env:
+        - name: VERSION
+          value: "v2.0.0-canary"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5

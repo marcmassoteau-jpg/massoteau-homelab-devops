@@ -1,0 +1,34 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-app-blue-green
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: demo-app
+    deployment-strategy: blue-green
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: http://gitlab.homelab.local:30080/homelab/gitops.git
+    targetRevision: main
+    path: base/blue-green
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-blue-green
+
+  syncPolicy:
+    # Manual sync for blue-green - traffic switching requires careful control
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

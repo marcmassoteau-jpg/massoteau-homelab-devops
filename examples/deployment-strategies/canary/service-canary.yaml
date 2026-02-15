@@ -1,0 +1,27 @@
+# Canary Service
+# Routes traffic to canary deployment
+# Used in weighted traffic splitting with stable service
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-canary
+  namespace: production
+  labels:
+    app: myapp
+    version: canary
+spec:
+  selector:
+    app: myapp
+    version: canary
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None

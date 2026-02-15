@@ -1,0 +1,919 @@
+---
+# Monitoring Stack Deployment Role - Main Tasks
+# Deploys Prometheus, Grafana, AlertManager, Loki, and Promtail on Kubernetes using Helm
+
+#=============================================================================
+# PRE-FLIGHT CHECKS
+#=============================================================================
+
+- name: Check if kubectl is available
+  command: kubectl version --client --short
+  register: kubectl_version
+  changed_when: false
+  failed_when: kubectl_version.rc != 0
+
+- name: Check if Helm is available
+  command: helm version --short
+  register: helm_version
+  changed_when: false
+  failed_when: helm_version.rc != 0
+
+- name: Verify Kubernetes cluster connectivity
+  command: kubectl cluster-info
+  register: cluster_info
+  changed_when: false
+  failed_when: cluster_info.rc != 0
+
+- name: Display pre-flight check summary
+  debug:
+    msg:
+      - "Pre-flight checks passed:"
+      - "  kubectl: {{ kubectl_version.stdout }}"
+      - "  helm: {{ helm_version.stdout }}"
+      - "  Cluster: Connected"
+
+#=============================================================================
+# NAMESPACE CREATION
+#=============================================================================
+
+- name: Check if monitoring namespace exists
+  command: "kubectl get namespace {{ monitoring_namespace }}"
+  register: namespace_check
+  changed_when: false
+  failed_when: false
+
+- name: Create monitoring namespace
+  when: namespace_check.rc != 0 and monitoring_create_namespace
+  block:
+    - name: Create namespace manifest
+      copy:
+        dest: /tmp/monitoring-namespace.yaml
+        content: |
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: {{ monitoring_namespace }}
+            labels:
+              name: {{ monitoring_namespace }}
+              app.kubernetes.io/name: monitoring
+              app.kubernetes.io/component: observability
+              app.kubernetes.io/part-of: devops-platform
+              environment: homelab
+            annotations:
+              description: "Monitoring stack - Prometheus, Grafana, Loki"
+              phase: "7"
+              managed-by: ansible
+        mode: '0644'
+
+    - name: Apply namespace
+      command: kubectl apply -f /tmp/monitoring-namespace.yaml
+      register: namespace_create
+      changed_when: "'created' in namespace_create.stdout"
+
+    - name: Display namespace creation result
+      debug:
+        msg: "Namespace '{{ monitoring_namespace }}' created successfully"
+
+#=============================================================================
+# HELM REPOSITORY SETUP
+#=============================================================================
+
+- name: Add Prometheus Community Helm repository
+  command: "helm repo add prometheus-community {{ monitoring_prometheus_chart_repo }}"
+  register: helm_repo_prometheus
+  changed_when: "'has been added' in helm_repo_prometheus.stdout"
+  failed_when: false
+
+- name: Add Grafana Helm repository
+  command: "helm repo add grafana {{ monitoring_loki_chart_repo }}"
+  register: helm_repo_grafana
+  changed_when: "'has been added' in helm_repo_grafana.stdout"
+  failed_when: false
+
+- name: Update Helm repositories
+  command: helm repo update
+  register: helm_repo_update
+  changed_when: false
+
+- name: Verify kube-prometheus-stack chart is available
+  command: "helm search repo prometheus-community/{{ monitoring_prometheus_chart_name }}"
+  register: chart_search_prometheus
+  changed_when: false
+  failed_when: chart_search_prometheus.rc != 0
+
+- name: Verify Loki chart is available
+  command: "helm search repo grafana/{{ monitoring_loki_chart_name }}"
+  register: chart_search_loki
+  changed_when: false
+  failed_when: chart_search_loki.rc != 0
+
+- name: Verify Promtail chart is available
+  command: "helm search repo grafana/{{ monitoring_promtail_chart_name }}"
+  register: chart_search_promtail
+  changed_when: false
+  failed_when: chart_search_promtail.rc != 0
+
+- name: Display available charts
+  debug:
+    msg:
+      - "Helm charts available:"
+      - "  kube-prometheus-stack: OK"
+      - "  loki: OK"
+      - "  promtail: OK"
+
+#=============================================================================
+# CHECK EXISTING DEPLOYMENT
+#=============================================================================
+
+- name: Check if kube-prometheus-stack is already deployed
+  command: "helm list -n {{ monitoring_namespace }} -o json"
+  register: helm_list
+  changed_when: false
+  failed_when: false
+
+- name: Parse Helm list output for kube-prometheus-stack
+  set_fact:
+    prometheus_stack_deployed: "{{ (helm_list.stdout | from_json | selectattr('name', 'equalto', monitoring_release_name) | list | length > 0) }}"
+
+- name: Parse Helm list output for Loki
+  set_fact:
+    loki_deployed: "{{ (helm_list.stdout | from_json | selectattr('name', 'equalto', 'loki') | list | length > 0) }}"
+
+- name: Parse Helm list output for Promtail
+  set_fact:
+    promtail_deployed: "{{ (helm_list.stdout | from_json | selectattr('name', 'equalto', 'promtail') | list | length > 0) }}"
+
+- name: Display deployment status
+  debug:
+    msg:
+      - "Deployment status:"
+      - "  kube-prometheus-stack: {{ 'Already deployed' if prometheus_stack_deployed else 'Not deployed' }}"
+      - "  Loki: {{ 'Already deployed' if loki_deployed else 'Not deployed' }}"
+      - "  Promtail: {{ 'Already deployed' if promtail_deployed else 'Not deployed' }}"
+
+#=============================================================================
+# GENERATE HELM VALUES - KUBE-PROMETHEUS-STACK
+#=============================================================================
+
+- name: Create kube-prometheus-stack Helm values file
+  copy:
+    dest: /tmp/prometheus-stack-values.yaml
+    content: |
+      # kube-prometheus-stack Helm Values - Generated by Ansible
+
+      # Prometheus configuration
+      prometheus:
+        prometheusSpec:
+          retention: {{ monitoring_prometheus_retention }}
+          resources:
+            requests:
+              cpu: {{ monitoring_prometheus_cpu_request }}
+              memory: {{ monitoring_prometheus_memory_request }}
+            limits:
+              cpu: {{ monitoring_prometheus_cpu_limit }}
+              memory: {{ monitoring_prometheus_memory_limit }}
+          storageSpec:
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: {{ monitoring_prometheus_storage_size }}
+          serviceMonitorSelectorNilUsesHelmValues: false
+          podMonitorSelectorNilUsesHelmValues: false
+          ruleSelectorNilUsesHelmValues: false
+
+      # Grafana configuration
+      grafana:
+        adminPassword: {{ monitoring_grafana_admin_password }}
+        resources:
+          requests:
+            cpu: {{ monitoring_grafana_cpu_request }}
+            memory: {{ monitoring_grafana_memory_request }}
+          limits:
+            cpu: {{ monitoring_grafana_cpu_limit }}
+            memory: {{ monitoring_grafana_memory_limit }}
+        ingress:
+          enabled: false  # Using Traefik IngressRoute instead
+        plugins:
+          - grafana-piechart-panel
+          - grafana-clock-panel
+        additionalDataSources:
+          - name: Loki
+            type: loki
+            url: http://loki-gateway.{{ monitoring_namespace }}.svc.cluster.local:80
+            access: proxy
+            isDefault: false
+        sidecar:
+          dashboards:
+            enabled: true
+            searchNamespace: ALL
+          datasources:
+            enabled: true
+
+      # AlertManager configuration
+      alertmanager:
+        alertmanagerSpec:
+          resources:
+            requests:
+              cpu: {{ monitoring_alertmanager_cpu_request }}
+              memory: {{ monitoring_alertmanager_memory_request }}
+            limits:
+              cpu: {{ monitoring_alertmanager_cpu_limit }}
+              memory: {{ monitoring_alertmanager_memory_limit }}
+
+      # Node Exporter
+      nodeExporter:
+        enabled: true
+
+      # Kube State Metrics
+      kubeStateMetrics:
+        enabled: true
+
+      # Default ServiceMonitors for Kubernetes components
+      kubeApiServer:
+        enabled: true
+      kubeControllerManager:
+        enabled: true
+      kubeScheduler:
+        enabled: true
+      kubeProxy:
+        enabled: true
+      kubeEtcd:
+        enabled: true
+      kubelet:
+        enabled: true
+    mode: '0644'
+  register: prometheus_values_file
+
+- name: Display values file location
+  debug:
+    msg: "kube-prometheus-stack values file created at: /tmp/prometheus-stack-values.yaml"
+
+#=============================================================================
+# DEPLOY OR UPGRADE KUBE-PROMETHEUS-STACK
+#=============================================================================
+
+- name: Deploy kube-prometheus-stack (initial installation)
+  when: not prometheus_stack_deployed or monitoring_force_redeploy
+  block:
+    - name: Install kube-prometheus-stack via Helm
+      command: >
+        helm install {{ monitoring_release_name }}
+        prometheus-community/{{ monitoring_prometheus_chart_name }}
+        --namespace {{ monitoring_namespace }}
+        --create-namespace
+        --version {{ monitoring_prometheus_chart_version }}
+        --values /tmp/prometheus-stack-values.yaml
+        --timeout {{ monitoring_helm_timeout }}
+        {{ '--wait' if monitoring_helm_wait else '' }}
+      register: helm_install_prometheus
+      async: 600
+      poll: 15
+
+    - name: Display installation progress
+      debug:
+        msg: "kube-prometheus-stack installation completed."
+
+- name: Upgrade kube-prometheus-stack (if already deployed and not force redeploying)
+  when: prometheus_stack_deployed and not monitoring_force_redeploy
+  block:
+    - name: Upgrade kube-prometheus-stack via Helm
+      command: >
+        helm upgrade {{ monitoring_release_name }}
+        prometheus-community/{{ monitoring_prometheus_chart_name }}
+        --namespace {{ monitoring_namespace }}
+        --version {{ monitoring_prometheus_chart_version }}
+        --values /tmp/prometheus-stack-values.yaml
+        --timeout {{ monitoring_helm_timeout }}
+        {{ '--wait' if monitoring_helm_wait else '' }}
+      register: helm_upgrade_prometheus
+      async: 600
+      poll: 15
+
+    - name: Display upgrade result
+      debug:
+        msg: "kube-prometheus-stack upgraded successfully"
+
+#=============================================================================
+# WAIT FOR PROMETHEUS STACK TO BE READY
+#=============================================================================
+
+- name: Wait for Prometheus stack pods to be Running
+  when: monitoring_wait_for_ready
+  block:
+    - name: Wait for Prometheus server
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=prometheus
+        -n {{ monitoring_namespace }}
+        --timeout={{ monitoring_ready_timeout }}s
+      register: prometheus_ready
+      retries: 3
+      delay: 15
+      until: prometheus_ready.rc == 0
+      failed_when: false
+
+    - name: Wait for Grafana
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=grafana
+        -n {{ monitoring_namespace }}
+        --timeout={{ monitoring_ready_timeout }}s
+      register: grafana_ready
+      retries: 3
+      delay: 15
+      until: grafana_ready.rc == 0
+      failed_when: false
+
+    - name: Wait for AlertManager
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=alertmanager
+        -n {{ monitoring_namespace }}
+        --timeout={{ monitoring_ready_timeout }}s
+      register: alertmanager_ready
+      retries: 3
+      delay: 15
+      until: alertmanager_ready.rc == 0
+      failed_when: false
+
+    - name: Check all Prometheus stack pods status
+      command: "kubectl get pods -n {{ monitoring_namespace }} -l app.kubernetes.io/instance={{ monitoring_release_name }}"
+      register: prometheus_stack_pods
+      changed_when: false
+
+    - name: Display Prometheus stack pod status
+      debug:
+        var: prometheus_stack_pods.stdout_lines
+
+#=============================================================================
+# GENERATE HELM VALUES - LOKI
+#=============================================================================
+
+- name: Create Loki Helm values file
+  copy:
+    dest: /tmp/loki-values.yaml
+    content: |
+      # Loki Helm Values - Generated by Ansible
+
+      loki:
+        commonConfig:
+          replication_factor: 1
+        storage:
+          type: filesystem
+        limits_config:
+          retention_period: {{ monitoring_loki_retention }}
+        schemaConfig:
+          configs:
+            - from: "2024-04-01"
+              store: tsdb
+              object_store: filesystem
+              schema: v13
+              index:
+                prefix: loki_index_
+                period: 24h
+
+      singleBinary:
+        replicas: 1
+        resources:
+          requests:
+            cpu: {{ monitoring_loki_cpu_request }}
+            memory: {{ monitoring_loki_memory_request }}
+          limits:
+            cpu: {{ monitoring_loki_cpu_limit }}
+            memory: {{ monitoring_loki_memory_limit }}
+        persistence:
+          enabled: true
+          size: {{ monitoring_loki_storage_size }}
+
+      gateway:
+        enabled: true
+
+      # Disable multi-tenant mode for homelab
+      deploymentMode: SingleBinary
+
+      chunksCache:
+        enabled: false
+      resultsCache:
+        enabled: false
+
+      backend:
+        replicas: 0
+      read:
+        replicas: 0
+      write:
+        replicas: 0
+    mode: '0644'
+  register: loki_values_file
+
+#=============================================================================
+# DEPLOY OR UPGRADE LOKI
+#=============================================================================
+
+- name: Deploy Loki (initial installation)
+  when: not loki_deployed or monitoring_force_redeploy
+  block:
+    - name: Install Loki via Helm
+      command: >
+        helm install loki
+        grafana/{{ monitoring_loki_chart_name }}
+        --namespace {{ monitoring_namespace }}
+        --version {{ monitoring_loki_chart_version }}
+        --values /tmp/loki-values.yaml
+        --timeout {{ monitoring_helm_timeout }}
+        {{ '--wait' if monitoring_helm_wait else '' }}
+      register: helm_install_loki
+      async: 600
+      poll: 15
+
+    - name: Display Loki installation result
+      debug:
+        msg: "Loki installation completed."
+
+- name: Upgrade Loki (if already deployed and not force redeploying)
+  when: loki_deployed and not monitoring_force_redeploy
+  block:
+    - name: Upgrade Loki via Helm
+      command: >
+        helm upgrade loki
+        grafana/{{ monitoring_loki_chart_name }}
+        --namespace {{ monitoring_namespace }}
+        --version {{ monitoring_loki_chart_version }}
+        --values /tmp/loki-values.yaml
+        --timeout {{ monitoring_helm_timeout }}
+        {{ '--wait' if monitoring_helm_wait else '' }}
+      register: helm_upgrade_loki
+      async: 600
+      poll: 15
+
+    - name: Display Loki upgrade result
+      debug:
+        msg: "Loki upgraded successfully"
+
+#=============================================================================
+# GENERATE HELM VALUES - PROMTAIL
+#=============================================================================
+
+- name: Create Promtail Helm values file
+  copy:
+    dest: /tmp/promtail-values.yaml
+    content: |
+      # Promtail Helm Values - Generated by Ansible
+
+      config:
+        clients:
+          - url: http://loki-gateway.{{ monitoring_namespace }}.svc.cluster.local:80/loki/api/v1/push
+
+      resources:
+        requests:
+          cpu: {{ monitoring_promtail_cpu_request }}
+          memory: {{ monitoring_promtail_memory_request }}
+        limits:
+          cpu: {{ monitoring_promtail_cpu_limit }}
+          memory: {{ monitoring_promtail_memory_limit }}
+    mode: '0644'
+  register: promtail_values_file
+
+#=============================================================================
+# DEPLOY OR UPGRADE PROMTAIL
+#=============================================================================
+
+- name: Deploy Promtail (initial installation)
+  when: not promtail_deployed or monitoring_force_redeploy
+  block:
+    - name: Install Promtail via Helm
+      command: >
+        helm install promtail
+        grafana/{{ monitoring_promtail_chart_name }}
+        --namespace {{ monitoring_namespace }}
+        --version {{ monitoring_promtail_chart_version }}
+        --values /tmp/promtail-values.yaml
+        --timeout {{ monitoring_helm_timeout }}
+        {{ '--wait' if monitoring_helm_wait else '' }}
+      register: helm_install_promtail
+      async: 600
+      poll: 15
+
+    - name: Display Promtail installation result
+      debug:
+        msg: "Promtail installation completed."
+
+- name: Upgrade Promtail (if already deployed and not force redeploying)
+  when: promtail_deployed and not monitoring_force_redeploy
+  block:
+    - name: Upgrade Promtail via Helm
+      command: >
+        helm upgrade promtail
+        grafana/{{ monitoring_promtail_chart_name }}
+        --namespace {{ monitoring_namespace }}
+        --version {{ monitoring_promtail_chart_version }}
+        --values /tmp/promtail-values.yaml
+        --timeout {{ monitoring_helm_timeout }}
+        {{ '--wait' if monitoring_helm_wait else '' }}
+      register: helm_upgrade_promtail
+      async: 600
+      poll: 15
+
+    - name: Display Promtail upgrade result
+      debug:
+        msg: "Promtail upgraded successfully"
+
+#=============================================================================
+# WAIT FOR LOKI AND PROMTAIL
+#=============================================================================
+
+- name: Wait for Loki and Promtail pods to be Running
+  when: monitoring_wait_for_ready
+  block:
+    - name: Wait for Loki
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=loki
+        -n {{ monitoring_namespace }}
+        --timeout={{ monitoring_ready_timeout }}s
+      register: loki_ready
+      retries: 3
+      delay: 15
+      until: loki_ready.rc == 0
+      failed_when: false
+
+    - name: Wait for Promtail
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=promtail
+        -n {{ monitoring_namespace }}
+        --timeout={{ monitoring_ready_timeout }}s
+      register: promtail_ready
+      retries: 3
+      delay: 15
+      until: promtail_ready.rc == 0
+      failed_when: false
+
+    - name: Check Loki and Promtail pod status
+      command: "kubectl get pods -n {{ monitoring_namespace }} -l 'app.kubernetes.io/name in (loki,promtail)'"
+      register: loki_promtail_pods
+      changed_when: false
+
+    - name: Display Loki and Promtail pod status
+      debug:
+        var: loki_promtail_pods.stdout_lines
+
+#=============================================================================
+# APPLY SERVICEMONITORS
+#=============================================================================
+
+- name: Apply ServiceMonitor for GitLab
+  when: monitoring_servicemonitor_gitlab
+  block:
+    - name: Check if GitLab namespace exists
+      command: kubectl get namespace gitlab
+      register: gitlab_ns_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create GitLab ServiceMonitor manifest
+      when: gitlab_ns_check.rc == 0
+      copy:
+        dest: /tmp/servicemonitor-gitlab.yaml
+        content: |
+          ---
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: gitlab-metrics
+            namespace: {{ monitoring_namespace }}
+            labels:
+              app.kubernetes.io/name: gitlab
+              app.kubernetes.io/part-of: monitoring
+              release: {{ monitoring_release_name }}
+          spec:
+            namespaceSelector:
+              matchNames:
+                - gitlab
+            selector:
+              matchLabels:
+                app: webservice
+            endpoints:
+              - port: http-workhorse
+                path: /-/metrics
+                interval: 30s
+        mode: '0644'
+
+    - name: Apply GitLab ServiceMonitor
+      when: gitlab_ns_check.rc == 0
+      command: kubectl apply -f /tmp/servicemonitor-gitlab.yaml
+      register: sm_gitlab
+      changed_when: "'created' in sm_gitlab.stdout or 'configured' in sm_gitlab.stdout"
+
+- name: Apply ServiceMonitor for Jenkins
+  when: monitoring_servicemonitor_jenkins
+  block:
+    - name: Check if Jenkins namespace exists
+      command: kubectl get namespace jenkins
+      register: jenkins_ns_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create Jenkins ServiceMonitor manifest
+      when: jenkins_ns_check.rc == 0
+      copy:
+        dest: /tmp/servicemonitor-jenkins.yaml
+        content: |
+          ---
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: jenkins-metrics
+            namespace: {{ monitoring_namespace }}
+            labels:
+              app.kubernetes.io/name: jenkins
+              app.kubernetes.io/part-of: monitoring
+              release: {{ monitoring_release_name }}
+          spec:
+            namespaceSelector:
+              matchNames:
+                - jenkins
+            selector:
+              matchLabels:
+                app.kubernetes.io/name: jenkins
+            endpoints:
+              - port: http
+                path: /prometheus
+                interval: 30s
+        mode: '0644'
+
+    - name: Apply Jenkins ServiceMonitor
+      when: jenkins_ns_check.rc == 0
+      command: kubectl apply -f /tmp/servicemonitor-jenkins.yaml
+      register: sm_jenkins
+      changed_when: "'created' in sm_jenkins.stdout or 'configured' in sm_jenkins.stdout"
+
+- name: Apply ServiceMonitor for ArgoCD
+  when: monitoring_servicemonitor_argocd
+  block:
+    - name: Check if ArgoCD namespace exists
+      command: kubectl get namespace argocd
+      register: argocd_ns_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create ArgoCD ServiceMonitor manifest
+      when: argocd_ns_check.rc == 0
+      copy:
+        dest: /tmp/servicemonitor-argocd.yaml
+        content: |
+          ---
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: argocd-metrics
+            namespace: {{ monitoring_namespace }}
+            labels:
+              app.kubernetes.io/name: argocd
+              app.kubernetes.io/part-of: monitoring
+              release: {{ monitoring_release_name }}
+          spec:
+            namespaceSelector:
+              matchNames:
+                - argocd
+            selector:
+              matchLabels:
+                app.kubernetes.io/part-of: argocd
+            endpoints:
+              - port: metrics
+                interval: 30s
+        mode: '0644'
+
+    - name: Apply ArgoCD ServiceMonitor
+      when: argocd_ns_check.rc == 0
+      command: kubectl apply -f /tmp/servicemonitor-argocd.yaml
+      register: sm_argocd
+      changed_when: "'created' in sm_argocd.stdout or 'configured' in sm_argocd.stdout"
+
+- name: Apply ServiceMonitor for Traefik
+  when: monitoring_servicemonitor_traefik
+  block:
+    - name: Check if Traefik is deployed
+      command: kubectl get service traefik -n kube-system
+      register: traefik_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create Traefik ServiceMonitor manifest
+      when: traefik_check.rc == 0
+      copy:
+        dest: /tmp/servicemonitor-traefik.yaml
+        content: |
+          ---
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: traefik-metrics
+            namespace: {{ monitoring_namespace }}
+            labels:
+              app.kubernetes.io/name: traefik
+              app.kubernetes.io/part-of: monitoring
+              release: {{ monitoring_release_name }}
+          spec:
+            namespaceSelector:
+              matchNames:
+                - kube-system
+            selector:
+              matchLabels:
+                app.kubernetes.io/name: traefik
+            endpoints:
+              - port: metrics
+                path: /metrics
+                interval: 30s
+        mode: '0644'
+
+    - name: Apply Traefik ServiceMonitor
+      when: traefik_check.rc == 0
+      command: kubectl apply -f /tmp/servicemonitor-traefik.yaml
+      register: sm_traefik
+      changed_when: "'created' in sm_traefik.stdout or 'configured' in sm_traefik.stdout"
+
+#=============================================================================
+# APPLY ALERT RULES
+#=============================================================================
+
+- name: Apply PrometheusRule for homelab alerts
+  when: monitoring_alerting_enabled
+  block:
+    - name: Create PrometheusRule manifest
+      copy:
+        dest: /tmp/prometheus-rules.yaml
+        content: |
+          ---
+          apiVersion: monitoring.coreos.com/v1
+          kind: PrometheusRule
+          metadata:
+            name: homelab-alerts
+            namespace: {{ monitoring_namespace }}
+            labels:
+              app.kubernetes.io/name: homelab-alerts
+              app.kubernetes.io/part-of: monitoring
+              release: {{ monitoring_release_name }}
+          spec:
+            groups:
+              - name: node-alerts
+                rules:
+                  - alert: NodeHighCPU
+                    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "High CPU usage on {{ '{{' }} $labels.instance {{ '}}' }}"
+                      description: "CPU usage is above 85% for more than 5 minutes."
+                  - alert: NodeHighMemory
+                    expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "High memory usage on {{ '{{' }} $labels.instance {{ '}}' }}"
+                      description: "Memory usage is above 90% for more than 5 minutes."
+                  - alert: NodeDiskSpaceLow
+                    expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 85
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Low disk space on {{ '{{' }} $labels.instance {{ '}}' }}"
+                      description: "Disk usage is above 85% for more than 10 minutes."
+              - name: kubernetes-alerts
+                rules:
+                  - alert: PodCrashLooping
+                    expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 0
+                    for: 15m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} is crash looping"
+                      description: "Pod has been restarting frequently over the last 15 minutes."
+                  - alert: PodNotReady
+                    expr: kube_pod_status_ready{condition="true"} == 0
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} is not ready"
+                      description: "Pod has been in a non-ready state for more than 10 minutes."
+                  - alert: PersistentVolumeSpaceLow
+                    expr: kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.15
+                    for: 10m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: "PV {{ '{{' }} $labels.persistentvolumeclaim {{ '}}' }} running low on space"
+                      description: "PersistentVolume has less than 15% free space."
+        mode: '0644'
+
+    - name: Apply PrometheusRule
+      command: kubectl apply -f /tmp/prometheus-rules.yaml
+      register: rules_apply
+      changed_when: "'created' in rules_apply.stdout or 'configured' in rules_apply.stdout"
+
+#=============================================================================
+# DEPLOY TRAEFIK INGRESSROUTES
+#=============================================================================
+
+- name: Deploy Traefik IngressRoutes
+  when: monitoring_ingress_enabled
+  block:
+    - name: Check if Traefik CRDs are available
+      command: kubectl get crd ingressroutes.traefik.io
+      register: traefik_crd_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create Grafana IngressRoute from template
+      template:
+        src: grafana-ingress.yaml.j2
+        dest: /tmp/grafana-ingressroute.yaml
+        mode: '0644'
+      when: traefik_crd_check.rc == 0
+
+    - name: Apply Grafana IngressRoute
+      command: kubectl apply -f /tmp/grafana-ingressroute.yaml
+      register: grafana_ingress_create
+      changed_when: "'created' in grafana_ingress_create.stdout or 'configured' in grafana_ingress_create.stdout"
+      when: traefik_crd_check.rc == 0
+
+    - name: Create Prometheus IngressRoute from template
+      template:
+        src: prometheus-ingress.yaml.j2
+        dest: /tmp/prometheus-ingressroute.yaml
+        mode: '0644'
+      when: traefik_crd_check.rc == 0
+
+    - name: Apply Prometheus IngressRoute
+      command: kubectl apply -f /tmp/prometheus-ingressroute.yaml
+      register: prometheus_ingress_create
+      changed_when: "'created' in prometheus_ingress_create.stdout or 'configured' in prometheus_ingress_create.stdout"
+      when: traefik_crd_check.rc == 0
+
+    - name: Create AlertManager IngressRoute from template
+      template:
+        src: alertmanager-ingress.yaml.j2
+        dest: /tmp/alertmanager-ingressroute.yaml
+        mode: '0644'
+      when: traefik_crd_check.rc == 0
+
+    - name: Apply AlertManager IngressRoute
+      command: kubectl apply -f /tmp/alertmanager-ingressroute.yaml
+      register: alertmanager_ingress_create
+      changed_when: "'created' in alertmanager_ingress_create.stdout or 'configured' in alertmanager_ingress_create.stdout"
+      when: traefik_crd_check.rc == 0
+
+#=============================================================================
+# DISPLAY SUMMARY
+#=============================================================================
+
+- name: Get deployment summary
+  command: "helm list -n {{ monitoring_namespace }}"
+  register: helm_list_final
+  changed_when: false
+
+- name: Display deployment summary
+  debug:
+    msg:
+      - "================================================================"
+      - "  Monitoring Stack Deployment Completed Successfully!"
+      - "================================================================"
+      - ""
+      - "Deployed Components:"
+      - "  kube-prometheus-stack: {{ monitoring_prometheus_chart_version }}"
+      - "  Loki: {{ monitoring_loki_chart_version }}"
+      - "  Promtail: {{ monitoring_promtail_chart_version }}"
+      - ""
+      - "Access URLs:"
+      - "  Grafana:      http://{{ monitoring_grafana_domain }}"
+      - "  Prometheus:   http://{{ monitoring_prometheus_domain }}"
+      - "  AlertManager: http://{{ monitoring_alertmanager_domain }}"
+      - ""
+      - "Grafana Credentials:"
+      - "  Username: admin"
+      - "  Password: {{ monitoring_grafana_admin_password }}"
+      - ""
+      - "{{ helm_list_final.stdout_lines }}"
+
+- name: Display next steps
+  debug:
+    msg:
+      - ""
+      - "Next Steps:"
+      - "  1. Access Grafana at http://{{ monitoring_grafana_domain }}"
+      - "  2. Login with username 'admin' and the password shown above"
+      - "  3. Change the admin password"
+      - "  4. Explore pre-installed dashboards"
+      - "  5. Configure alert notification channels"
+      - ""
+      - "IMPORTANT: Change the Grafana admin password after first login!"
+      - ""
+      - "For more information, see Article 18 in docs/articles/"
+      - ""

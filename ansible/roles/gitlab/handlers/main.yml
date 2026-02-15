@@ -1,0 +1,8 @@
+---
+# GitLab Role Handlers
+# Currently no handlers needed - Helm manages GitLab lifecycle
+
+# Future handlers could include:
+# - Restart GitLab services
+# - Trigger backup
+# - Refresh configuration

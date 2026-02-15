@@ -1,0 +1,9 @@
+---
+# Velero Backup & Disaster Recovery Role - Handlers
+
+- name: Restart Velero
+  command: >
+    kubectl rollout restart deployment
+    velero
+    -n {{ velero_namespace }}
+  listen: "restart velero"

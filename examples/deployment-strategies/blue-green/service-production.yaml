@@ -1,0 +1,23 @@
+# Production Service
+# Routes traffic to pods with role=active label
+# Traffic switching happens by changing pod labels (blue or green)
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-production
+  namespace: production
+  labels:
+    app: myapp
+    service-type: production
+spec:
+  selector:
+    app: myapp
+    role: active  # Only route to active environment
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None

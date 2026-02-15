@@ -11,4 +11,4 @@ firewall_allowed_cluster_ips: []
 firewall_ssh_port: 22
 
 # Whether this is a Kubernetes control plane node
-k8s_control_plane: false
+firewall_k8s_control_plane: false

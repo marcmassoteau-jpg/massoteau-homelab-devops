@@ -1,0 +1,78 @@
+# Build Template
+# Reusable template for building applications
+# Usage: extends: .build-template
+
+.build-template:
+  stage: build
+  image: alpine:latest
+  variables:
+    BUILD_COMMAND: "echo 'No build command specified'"
+    BUILD_OUTPUT_DIR: "dist"
+  script:
+    - echo "Starting build process..."
+    - echo "Build command: $BUILD_COMMAND"
+    - eval "$BUILD_COMMAND"
+    - echo "Build complete!"
+  artifacts:
+    paths:
+      - $BUILD_OUTPUT_DIR/
+    expire_in: 1 week
+    reports:
+      dotenv: build.env
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-build
+    paths:
+      - node_modules/
+      - .pip-cache/
+      - vendor/
+  tags:
+    - kubernetes
+    - docker
+
+# Node.js specific build template
+.build-node:
+  extends: .build-template
+  image: node:18-alpine
+  variables:
+    BUILD_COMMAND: "npm ci && npm run build"
+  before_script:
+    - node --version
+    - npm --version
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-node
+    paths:
+      - node_modules/
+      - .npm/
+
+# Python specific build template
+.build-python:
+  extends: .build-template
+  image: python:3.11-alpine
+  variables:
+    BUILD_COMMAND: "pip install --cache-dir .pip-cache -r requirements.txt && python setup.py build"
+  before_script:
+    - python --version
+    - pip --version
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-python
+    paths:
+      - .pip-cache/
+      - venv/
+
+# Go specific build template
+.build-go:
+  extends: .build-template
+  image: golang:1.21-alpine
+  variables:
+    BUILD_COMMAND: "go build -o $BUILD_OUTPUT_DIR/app ."
+    BUILD_OUTPUT_DIR: "bin"
+  before_script:
+    - go version
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-go
+    paths:
+      - .go-cache/
+  artifacts:
+    paths:
+      - bin/
+    expire_in: 1 week

@@ -1,0 +1,278 @@
+---
+# ============================================================================
+# Playbook: Deploy Cluster Autoscaler on Kubernetes
+# Article: 22 - Cluster Autoscaler with Proxmox
+# Phase: Scaling & Performance
+# ============================================================================
+#
+# Description:
+#   Deploys a custom Proxmox-based cluster autoscaler on an existing Kubernetes
+#   cluster. Since no native Proxmox provider exists for the Kubernetes Cluster
+#   Autoscaler, this uses CronJobs to detect pending pods and trigger VM
+#   provisioning via the Proxmox API.
+#
+# Prerequisites:
+#   - Kubernetes cluster operational (Phase 4+)
+#   - kubectl configured on master node
+#   - Helm 3 installed
+#   - Proxmox VE with API access
+#   - VM template with cloud-init (template ID 9000)
+#   - Reserved IP range: 192.168.1.245-250
+#
+# Usage:
+#   ansible-playbook playbooks/10-deploy-cluster-autoscaler.yml
+#
+#   With custom thresholds:
+#   ansible-playbook playbooks/10-deploy-cluster-autoscaler.yml \
+#     -e cluster_autoscaler_scale_up_threshold=70 \
+#     -e cluster_autoscaler_max_nodes=10
+#
+#   Without HPA examples:
+#   ansible-playbook playbooks/10-deploy-cluster-autoscaler.yml \
+#     -e cluster_autoscaler_deploy_hpa_examples=false
+#
+# What This Playbook Does:
+#   1. Verifies cluster prerequisites (kubectl, Helm, connectivity)
+#   2. Deploys metrics-server if not present
+#   3. Creates autoscaling namespace
+#   4. Configures RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
+#   5. Deploys Proxmox configuration ConfigMap
+#   6. Deploys scale-up CronJob (checks for pending pods every 2 min)
+#   7. Deploys scale-down CronJob (checks node utilization every 5 min)
+#   8. Optionally deploys HPA example resources
+#   9. Verifies all components are running
+#
+# Components Deployed:
+#   - metrics-server (if not present)
+#   - ServiceAccount, ClusterRole, ClusterRoleBinding
+#   - ConfigMap with Proxmox and scaling configuration
+#   - Scale-up CronJob (detects pending pods)
+#   - Scale-down CronJob (detects underutilized nodes)
+#   - Optional HPA example (webapp with 2-10 replicas)
+#
+# After Deployment:
+#   - Monitor CronJobs: kubectl get cronjobs -n autoscaling
+#   - Check scale decisions: kubectl get jobs -n autoscaling
+#   - View node metrics: kubectl top nodes
+#   - Test with: scripts/autoscaling/test-scale-up.sh
+#
+# Next Steps:
+#   - Configure Proxmox API credentials
+#   - Verify VM template exists on Proxmox
+#   - Test scale-up and scale-down workflows
+#   - Integrate with monitoring (Prometheus/Grafana)
+#
+# ============================================================================
+
+- name: Deploy Cluster Autoscaler on Kubernetes
+  hosts: masters
+  become: yes
+  gather_facts: yes
+
+  # =========================================================================
+  # VARIABLES
+  # =========================================================================
+  vars:
+    # Core configuration
+    cluster_autoscaler_namespace: autoscaling
+
+    # Display banner
+    display_banner: true
+
+  # =========================================================================
+  # PRE-TASKS
+  # =========================================================================
+  pre_tasks:
+    - name: Display deployment banner
+      when: display_banner
+      ansible.builtin.debug:
+        msg:
+          - "================================================================"
+          - "                                                                "
+          - "        Cluster Autoscaler Deployment on Kubernetes             "
+          - "       Article 22: Cluster Autoscaler with Proxmox             "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "This playbook will deploy a custom Proxmox-based cluster"
+          - "autoscaler on your Kubernetes cluster."
+          - ""
+          - "Components:"
+          - "  - metrics-server (HPA and node metrics)"
+          - "  - Scale-up CronJob (pending pod detection)"
+          - "  - Scale-down CronJob (node utilization monitoring)"
+          - "  - RBAC and ConfigMap resources"
+          - ""
+          - "Deployment time: 2-3 minutes"
+          - "Namespace: {{ cluster_autoscaler_namespace }}"
+          - ""
+
+    - name: Verify we're on a master node
+      ansible.builtin.assert:
+        that:
+          - "'masters' in group_names"
+        fail_msg: "This playbook must run on master nodes only"
+        success_msg: "Running on master node"
+
+    - name: Check if kubectl is configured
+      ansible.builtin.command: kubectl cluster-info
+      register: kubectl_check
+      changed_when: false
+      failed_when: kubectl_check.rc != 0
+
+    - name: Display cluster info
+      ansible.builtin.debug:
+        msg: "Connected to Kubernetes cluster"
+
+  # =========================================================================
+  # ROLES
+  # =========================================================================
+  roles:
+    - role: cluster-autoscaler
+      tags:
+        - cluster-autoscaler
+        - autoscaling
+        - deploy
+        - article22
+
+  # =========================================================================
+  # POST-TASKS
+  # =========================================================================
+  post_tasks:
+    - name: Wait for autoscaler components to stabilize
+      ansible.builtin.pause:
+        seconds: 10
+        prompt: "Waiting for autoscaler components to stabilize..."
+
+    - name: Get CronJob status
+      ansible.builtin.command: kubectl get cronjobs -n {{ cluster_autoscaler_namespace }} -o wide
+      register: final_cronjobs
+      changed_when: false
+
+    - name: Display CronJob status
+      ansible.builtin.debug:
+        msg: "{{ final_cronjobs.stdout_lines }}"
+
+    - name: Get all resources in autoscaling namespace
+      ansible.builtin.command: kubectl get all -n {{ cluster_autoscaler_namespace }}
+      register: all_resources
+      changed_when: false
+
+    - name: Display all resources
+      ansible.builtin.debug:
+        msg: "{{ all_resources.stdout_lines }}"
+
+    - name: Check HPA status
+      ansible.builtin.command: kubectl get hpa --all-namespaces
+      register: hpa_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display HPA status
+      ansible.builtin.debug:
+        msg: "{{ hpa_status.stdout_lines }}"
+      when: hpa_status.rc == 0
+
+    - name: Get node metrics
+      ansible.builtin.command: kubectl top nodes
+      register: node_metrics
+      changed_when: false
+      failed_when: false
+
+    - name: Display node metrics
+      ansible.builtin.debug:
+        msg: "{{ node_metrics.stdout_lines }}"
+      when: node_metrics.rc == 0
+
+    - name: Create verification summary
+      ansible.builtin.debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "                                                                "
+          - "      Cluster Autoscaler Deployment Completed!                  "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "Monitoring Commands:"
+          - ""
+          - "1. Watch autoscaler checks:"
+          - "   kubectl get jobs -n {{ cluster_autoscaler_namespace }} -w"
+          - ""
+          - "2. View scale-up logs:"
+          - "   kubectl logs -n {{ cluster_autoscaler_namespace }} -l app.kubernetes.io/component=scale-up"
+          - ""
+          - "3. View scale-down logs:"
+          - "   kubectl logs -n {{ cluster_autoscaler_namespace }} -l app.kubernetes.io/component=scale-down"
+          - ""
+          - "4. Check node metrics:"
+          - "   kubectl top nodes"
+          - ""
+          - "5. Check HPA status:"
+          - "   kubectl get hpa --all-namespaces"
+          - ""
+          - "Testing:"
+          - "   scripts/autoscaling/test-scale-up.sh"
+          - "   scripts/autoscaling/test-scale-down.sh"
+          - ""
+          - "Documentation:"
+          - "   - Article 22: Cluster Autoscaler with Proxmox"
+          - "   - Role README: ansible/roles/cluster-autoscaler/README.md"
+          - "   - Manifests: Kubernetes/manifests/cluster-autoscaler/"
+          - "   - Scripts: scripts/autoscaling/"
+          - ""
+
+    - name: Save deployment information to file
+      ansible.builtin.copy:
+        content: |
+          # Cluster Autoscaler Deployment Information
+          # Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Components
+          - metrics-server (kube-system namespace)
+          - Scale-up CronJob (autoscaling namespace)
+          - Scale-down CronJob (autoscaling namespace)
+          - RBAC resources (cluster-scoped)
+          - Proxmox ConfigMap (autoscaling namespace)
+
+          ## Configuration
+          - Namespace: {{ cluster_autoscaler_namespace }}
+          - Min nodes: {{ cluster_autoscaler_min_nodes | default(4) }}
+          - Max nodes: {{ cluster_autoscaler_max_nodes | default(8) }}
+          - Scale-up threshold: {{ cluster_autoscaler_scale_up_threshold | default(80) }}% CPU
+          - Scale-down threshold: {{ cluster_autoscaler_scale_down_threshold | default(30) }}% CPU
+
+          ## Verification Commands
+          ```bash
+          # Check CronJobs
+          kubectl get cronjobs -n autoscaling
+
+          # Check recent jobs
+          kubectl get jobs -n autoscaling
+
+          # View scale-up logs
+          kubectl logs -n autoscaling -l app.kubernetes.io/component=scale-up
+
+          # Check node metrics
+          kubectl top nodes
+
+          # Check HPA
+          kubectl get hpa --all-namespaces
+          ```
+
+          ## Testing
+          ```bash
+          scripts/autoscaling/test-scale-up.sh
+          scripts/autoscaling/test-scale-down.sh
+          ```
+
+          ## Deployment Details
+          - Deployment Date: {{ ansible_date_time.date }}
+          - Deployed By: {{ ansible_user_id }}
+          - Ansible Host: {{ inventory_hostname }}
+        dest: "/tmp/cluster-autoscaler-deployment-info-{{ ansible_date_time.epoch }}.md"
+        mode: '0644'
+
+    - name: Display deployment info file location
+      ansible.builtin.debug:
+        msg: "Deployment information saved to: /tmp/cluster-autoscaler-deployment-info-{{ ansible_date_time.epoch }}.md"

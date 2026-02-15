@@ -1,0 +1,52 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app-stable
+  labels:
+    app: demo-app
+    track: stable
+    app.kubernetes.io/name: demo-app
+    app.kubernetes.io/component: stable
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: demo-app
+      track: stable
+  template:
+    metadata:
+      labels:
+        app: demo-app
+        track: stable
+    spec:
+      containers:
+        - name: demo-app
+          image: demo-app:stable
+          ports:
+            - name: http
+              containerPort: 5000
+          env:
+            - name: APP_TRACK
+              value: "stable"
+            - name: APP_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10

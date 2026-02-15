@@ -1,0 +1,18 @@
+# Combined service for traffic distribution testing
+# This service will be used to distribute traffic between stable and canary
+# We'll use kubectl port-forward and manual traffic distribution for testing
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp
+  namespace: canary-test
+  labels:
+    app: myapp
+spec:
+  selector:
+    app: myapp
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  type: ClusterIP

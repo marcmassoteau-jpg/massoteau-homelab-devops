@@ -1,0 +1,392 @@
+---
+# ============================================================================
+# Playbook: Deploy Jenkins on Kubernetes
+# Article: 18 - CI/CD Integration with Jenkins
+# Phase: 6.5 - Hybrid GitOps + CI/CD
+# ============================================================================
+#
+# Description:
+#   Deploys Jenkins on an existing Kubernetes cluster using the official Helm
+#   chart. Jenkins provides CI/CD automation with GitLab integration and
+#   dynamic Kubernetes pod-based agents for scalable build execution.
+#
+# Prerequisites:
+#   - Phase 6 complete (ArgoCD deployed and operational)
+#   - kubectl configured on master node
+#   - Helm 3 installed
+#   - Traefik ingress controller operational
+#   - Default storage class available
+#   - Sufficient resources: 2GB RAM, 1 CPU available
+#
+# Usage:
+#   ansible-playbook playbooks/07-deploy-jenkins.yml
+#
+#   With custom domain:
+#   ansible-playbook playbooks/07-deploy-jenkins.yml \
+#     -e jenkins_domain=jenkins.example.com
+#
+#   Force redeploy:
+#   ansible-playbook playbooks/07-deploy-jenkins.yml \
+#     -e jenkins_force_redeploy=true
+#
+#   With admin password:
+#   ansible-playbook playbooks/07-deploy-jenkins.yml \
+#     -e jenkins_admin_password=SecurePassword123
+#
+# What This Playbook Does:
+#   1. Verifies cluster prerequisites (kubectl, Helm)
+#   2. Creates Jenkins namespace
+#   3. Configures RBAC for Kubernetes plugin
+#   4. Adds Jenkins Helm repository
+#   5. Deploys Jenkins using homelab-optimized values
+#   6. Waits for controller pod to be Running
+#   7. Retrieves initial admin password
+#   8. Configures Traefik ingress
+#   9. Displays access information
+#
+# Components Deployed:
+#   - Jenkins Controller (Web UI and master)
+#   - Kubernetes Plugin (dynamic agent provisioning)
+#   - Pod Templates (jnlp, kaniko, kubectl, node, python, go)
+#   - GitLab Integration (webhook support)
+#   - Prometheus Metrics (Phase 7 monitoring)
+#
+# After Deployment:
+#   - Access Jenkins at: http://jenkins.homelab.local
+#   - Username: admin
+#   - Password: (displayed at end of playbook)
+#   - IMPORTANT: Change admin password after first login!
+#
+# Next Steps:
+#   - Configure GitLab credentials
+#   - Create your first pipeline
+#   - Test dynamic pod agents
+#   - Set up GitLab webhooks
+#   - Create shared library for reusable pipeline code
+#
+# ============================================================================
+
+- name: Deploy Jenkins on Kubernetes
+  hosts: masters
+  become: yes
+  gather_facts: yes
+
+  # =========================================================================
+  # VARIABLES
+  # =========================================================================
+  vars:
+    # Core configuration
+    jenkins_namespace: jenkins
+    jenkins_release_name: jenkins
+    jenkins_domain: jenkins.homelab.local
+
+    # Display banner
+    display_banner: true
+
+  # =========================================================================
+  # PRE-TASKS
+  # =========================================================================
+  pre_tasks:
+    - name: Display deployment banner
+      when: display_banner
+      debug:
+        msg:
+          - "================================================================"
+          - "                                                                "
+          - "           Jenkins Deployment on Kubernetes                     "
+          - "         Phase 6.5: Hybrid GitOps + CI/CD                       "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "This playbook will deploy Jenkins on your Kubernetes cluster"
+          - "for CI/CD automation with GitLab integration."
+          - ""
+          - "Components:"
+          - "  - Jenkins Controller (Web UI and API)"
+          - "  - Kubernetes Plugin (dynamic agents)"
+          - "  - Pod Templates (6 pre-configured)"
+          - "  - GitLab Integration"
+          - "  - Prometheus Metrics"
+          - ""
+          - "Deployment time: 5-8 minutes"
+          - "Namespace: {{ jenkins_namespace }}"
+          - "Domain: {{ jenkins_domain }}"
+          - ""
+
+    - name: Verify we're on a master node
+      assert:
+        that:
+          - "'masters' in group_names"
+        fail_msg: "This playbook must run on master nodes only"
+        success_msg: "Running on master node"
+
+    - name: Check if kubectl is configured
+      command: kubectl cluster-info
+      register: kubectl_check
+      changed_when: false
+      failed_when: kubectl_check.rc != 0
+
+    - name: Display cluster info
+      debug:
+        msg: "Connected to Kubernetes cluster"
+
+  # =========================================================================
+  # ROLES
+  # =========================================================================
+  roles:
+    - role: jenkins
+      tags:
+        - jenkins
+        - deploy
+        - phase6
+        - ci-cd
+
+  # =========================================================================
+  # POST-TASKS
+  # =========================================================================
+  post_tasks:
+    - name: Wait for Jenkins controller to stabilize
+      pause:
+        seconds: 30
+        prompt: "Waiting for Jenkins controller to stabilize..."
+
+    - name: Get final pod status
+      command: kubectl get pods -n {{ jenkins_namespace }} -o wide
+      register: final_pods
+      changed_when: false
+
+    - name: Display final pod status
+      debug:
+        msg: "{{ final_pods.stdout_lines }}"
+
+    - name: Count Running pods
+      shell: |
+        kubectl get pods -n {{ jenkins_namespace }} -o json | \
+        jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' | wc -l
+      register: running_pods_count
+      changed_when: false
+
+    - name: Count total pods
+      shell: |
+        kubectl get pods -n {{ jenkins_namespace }} -o json | \
+        jq -r '.items[] | .metadata.name' | wc -l
+      register: total_pods_count
+      changed_when: false
+
+    - name: Display deployment statistics
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "  Deployment Statistics"
+          - "================================================================"
+          - "  Pods Running: {{ running_pods_count.stdout | trim }}/{{ total_pods_count.stdout | trim }}"
+          - "  Namespace: {{ jenkins_namespace }}"
+          - ""
+
+    - name: Get Jenkins service endpoints
+      command: kubectl get svc -n {{ jenkins_namespace }} -o wide
+      register: services
+      changed_when: false
+
+    - name: Display services
+      debug:
+        msg:
+          - ""
+          - "Jenkins Services:"
+          - "{{ services.stdout_lines }}"
+
+    - name: Get persistent volume claims
+      command: kubectl get pvc -n {{ jenkins_namespace }}
+      register: pvcs
+      changed_when: false
+
+    - name: Display storage
+      debug:
+        msg:
+          - ""
+          - "Persistent Storage:"
+          - "{{ pvcs.stdout_lines }}"
+
+    - name: Create verification summary
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "                                                                "
+          - "         Jenkins Deployment Completed!                          "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "Quick Start Guide:"
+          - ""
+          - "1. Access Jenkins Web UI:"
+          - "   http://{{ jenkins_domain }}"
+          - ""
+          - "2. Login credentials:"
+          - "   Username: admin"
+          - "   Password: (see output above from jenkins role)"
+          - ""
+          - "3. First steps:"
+          - "   - Change admin password"
+          - "   - Configure GitLab credentials"
+          - "   - Create your first pipeline"
+          - "   - Test dynamic pod agents"
+          - ""
+          - "Documentation:"
+          - "   - Article 18: CI/CD Integration (docs/articles/)"
+          - "   - Role README: ansible/roles/jenkins/README.md"
+          - "   - Manifests: Kubernetes/manifests/jenkins/"
+          - "   - Jenkins Docs: https://www.jenkins.io/doc/"
+          - ""
+          - "Useful Commands:"
+          - "   kubectl get all -n {{ jenkins_namespace }}"
+          - "   kubectl logs -n {{ jenkins_namespace }} -l app.kubernetes.io/component=jenkins-controller"
+          - "   kubectl exec -n {{ jenkins_namespace }} -it deployment/jenkins -- /bin/bash"
+          - ""
+          - "Pod Templates Available:"
+          - "   - jnlp: Default Jenkins agent"
+          - "   - kaniko: Container image builder"
+          - "   - kubectl: Kubernetes operations"
+          - "   - node: Node.js applications"
+          - "   - python: Python applications"
+          - "   - go: Go applications"
+          - ""
+          - "GitLab Integration:"
+          - "   1. Create GitLab personal access token"
+          - "   2. Add credentials in Jenkins UI"
+          - "   3. Configure GitLab connection"
+          - "   4. Set up webhooks for automatic builds"
+          - ""
+          - "IMPORTANT:"
+          - "   - Change the admin password immediately!"
+          - "   - Save credentials securely"
+          - "   - Test pod templates before production use"
+          - ""
+          - "Next Phase:"
+          - "   Create Jenkins pipelines and shared libraries"
+          - "   Implement hybrid GitOps + CI/CD workflow"
+          - ""
+
+    - name: Save deployment information to file
+      copy:
+        content: |
+          # Jenkins Deployment Information
+          # Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Access Information
+          - Jenkins URL: http://{{ jenkins_domain }}
+          - Username: admin
+          - Password: Retrieved from Kubernetes secret
+
+          ## Retrieve Password
+          ```bash
+          kubectl -n {{ jenkins_namespace }} get secret {{ jenkins_release_name }} \
+            -o jsonpath="{.data.jenkins-admin-password}" | base64 --decode; echo
+          ```
+
+          ## Deployment Details
+          - Namespace: {{ jenkins_namespace }}
+          - Release: {{ jenkins_release_name }}
+          - Deployment Date: {{ ansible_date_time.date }}
+          - Deployed By: {{ ansible_user_id }}
+          - Ansible Host: {{ inventory_hostname }}
+
+          ## Pod Templates
+          1. **jnlp** - Default Jenkins agent
+          2. **kaniko** - Container image builder (no Docker daemon required)
+          3. **kubectl** - Kubernetes operations
+          4. **node** - Node.js applications (Node 20)
+          5. **python** - Python applications (Python 3.12)
+          6. **go** - Go applications (Go 1.22)
+
+          ## Verification Commands
+          ```bash
+          # Check pods
+          kubectl get pods -n {{ jenkins_namespace }}
+
+          # Check services
+          kubectl get svc -n {{ jenkins_namespace }}
+
+          # Check ingress
+          kubectl get ingress -n {{ jenkins_namespace }}
+
+          # Check PVC
+          kubectl get pvc -n {{ jenkins_namespace }}
+
+          # Controller logs
+          kubectl logs -n {{ jenkins_namespace }} -l app.kubernetes.io/component=jenkins-controller
+
+          # Helm status
+          helm list -n {{ jenkins_namespace }}
+          ```
+
+          ## GitLab Integration Setup
+          ```bash
+          # 1. Create GitLab personal access token (in GitLab UI)
+          #    Settings → Access Tokens
+          #    Scopes: api, read_repository, write_repository
+
+          # 2. Create Kubernetes secret
+          kubectl create secret generic gitlab-token \
+            --from-literal=token=YOUR_GITLAB_TOKEN \
+            -n {{ jenkins_namespace }}
+
+          # 3. Label secret for JCasC discovery
+          kubectl label secret gitlab-token \
+            "jenkins.io/credentials-type=secretText" \
+            -n {{ jenkins_namespace }}
+
+          # 4. Verify in Jenkins UI
+          #    Manage Jenkins → Configure System → GitLab
+          ```
+
+          ## Example Pipeline
+          ```groovy
+          pipeline {
+              agent {
+                  kubernetes {
+                      label 'node'
+                  }
+              }
+              stages {
+                  stage('Build') {
+                      steps {
+                          container('node') {
+                              sh 'npm install'
+                              sh 'npm run build'
+                          }
+                      }
+                  }
+                  stage('Test') {
+                      steps {
+                          container('node') {
+                              sh 'npm test'
+                          }
+                      }
+                  }
+              }
+          }
+          ```
+
+          ## Next Steps
+          1. Access Jenkins and change admin password
+          2. Configure GitLab integration credentials
+          3. Create your first pipeline job
+          4. Test pod templates with sample builds
+          5. Set up GitLab webhook for automatic builds
+          6. Create shared library for reusable pipeline code
+          7. Implement hybrid GitOps + CI/CD workflow
+
+          ## Documentation
+          - Article 18: docs/articles/Article-18-Jenkins-Integration.md
+          - Role README: ansible/roles/jenkins/README.md
+          - Manifests: Kubernetes/manifests/jenkins/
+          - Jenkins Docs: https://www.jenkins.io/doc/
+          - Kubernetes Plugin: https://plugins.jenkins.io/kubernetes/
+        dest: "/tmp/jenkins-deployment-info-{{ ansible_date_time.epoch }}.md"
+        mode: '0644'
+
+    - name: Display deployment info file location
+      debug:
+        msg: "Deployment information saved to: /tmp/jenkins-deployment-info-{{ ansible_date_time.epoch }}.md"

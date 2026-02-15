@@ -1,0 +1,72 @@
+# Canary Deployment
+# New version receiving a small percentage of traffic for testing
+# Gradually increases traffic if metrics remain healthy
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-canary
+  namespace: production
+  labels:
+    app: myapp
+    version: canary
+    deployment-strategy: canary
+spec:
+  replicas: 1  # Start with fewer replicas than stable
+  selector:
+    matchLabels:
+      app: myapp
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: myapp
+        version: canary
+        track: canary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: myapp
+        image: registry.gitlab.homelab.local/myproject/myapp:canary
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: VERSION
+          value: "canary"
+        - name: ENVIRONMENT
+          value: "production"
+        - name: TRACK
+          value: "canary"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

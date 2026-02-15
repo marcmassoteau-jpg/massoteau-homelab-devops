@@ -1,0 +1,23 @@
+---
+# Monitoring Stack Role - Handlers
+
+- name: Restart Prometheus
+  command: >
+    kubectl rollout restart statefulset
+    prometheus-kube-prometheus-stack-prometheus
+    -n {{ monitoring_namespace }}
+  listen: "restart monitoring"
+
+- name: Restart Grafana
+  command: >
+    kubectl rollout restart deployment
+    kube-prometheus-stack-grafana
+    -n {{ monitoring_namespace }}
+  listen: "restart monitoring"
+
+- name: Restart AlertManager
+  command: >
+    kubectl rollout restart statefulset
+    alertmanager-kube-prometheus-stack-alertmanager
+    -n {{ monitoring_namespace }}
+  listen: "restart monitoring"

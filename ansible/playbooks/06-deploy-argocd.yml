@@ -1,0 +1,301 @@
+---
+# ============================================================================
+# Playbook: Deploy ArgoCD on Kubernetes
+# Article: 17 - GitOps with ArgoCD
+# Phase: 6 - GitOps Continuous Delivery
+# ============================================================================
+#
+# Description:
+#   Deploys ArgoCD on an existing Kubernetes cluster using the official Helm
+#   chart. ArgoCD provides GitOps-based continuous delivery, automatically
+#   syncing Kubernetes state from Git repositories.
+#
+# Prerequisites:
+#   - Phase 5 complete (Kubernetes cluster with CI/CD operational)
+#   - kubectl configured on master node
+#   - Helm 3 installed
+#   - Traefik ingress controller operational
+#   - Sufficient resources: 3GB RAM, 3 CPUs available
+#
+# Usage:
+#   ansible-playbook playbooks/06-deploy-argocd.yml
+#
+#   With custom domain:
+#   ansible-playbook playbooks/06-deploy-argocd.yml \
+#     -e argocd_domain=argo.example.com
+#
+#   Force redeploy:
+#   ansible-playbook playbooks/06-deploy-argocd.yml \
+#     -e argocd_force_redeploy=true
+#
+#   With repository configuration:
+#   ansible-playbook playbooks/06-deploy-argocd.yml \
+#     -e argocd_configure_repo=true \
+#     -e argocd_repo_password=your-password
+#
+# What This Playbook Does:
+#   1. Verifies cluster prerequisites (kubectl, Helm)
+#   2. Creates ArgoCD namespace
+#   3. Adds ArgoCD Helm repository
+#   4. Deploys ArgoCD using homelab-optimized values
+#   5. Waits for all pods to be Running
+#   6. Installs ArgoCD CLI
+#   7. Retrieves initial admin password
+#   8. Optionally configures GitOps repository
+#   9. Displays access information
+#
+# Components Deployed:
+#   - ArgoCD Server (Web UI and API)
+#   - ArgoCD Repo Server (Git repository management)
+#   - ArgoCD Application Controller (sync engine)
+#   - ArgoCD ApplicationSet Controller
+#   - Redis (caching)
+#
+# After Deployment:
+#   - Access ArgoCD at: http://argocd.homelab.local
+#   - Username: admin
+#   - Password: (displayed at end of playbook)
+#   - IMPORTANT: Change admin password after first login!
+#
+# Next Steps:
+#   - Add your GitOps repository
+#   - Deploy your first application with ArgoCD
+#   - Set up multi-environment management
+#   - Configure hybrid CI/CD + GitOps workflow
+#
+# ============================================================================
+
+- name: Deploy ArgoCD on Kubernetes
+  hosts: masters
+  become: yes
+  gather_facts: yes
+
+  # =========================================================================
+  # VARIABLES
+  # =========================================================================
+  vars:
+    # Core configuration
+    argocd_namespace: argocd
+    argocd_release_name: argocd
+    argocd_domain: argocd.homelab.local
+
+    # Display banner
+    display_banner: true
+
+  # =========================================================================
+  # PRE-TASKS
+  # =========================================================================
+  pre_tasks:
+    - name: Display deployment banner
+      when: display_banner
+      debug:
+        msg:
+          - "================================================================"
+          - "                                                                "
+          - "           ArgoCD Deployment on Kubernetes                      "
+          - "         Phase 6: GitOps Continuous Delivery                    "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "This playbook will deploy ArgoCD on your Kubernetes cluster"
+          - "for GitOps-based continuous delivery."
+          - ""
+          - "Components:"
+          - "  - ArgoCD Server (Web UI and API)"
+          - "  - ArgoCD Repo Server"
+          - "  - ArgoCD Application Controller"
+          - "  - Redis (caching)"
+          - ""
+          - "Deployment time: 3-5 minutes"
+          - "Namespace: {{ argocd_namespace }}"
+          - "Domain: {{ argocd_domain }}"
+          - ""
+
+    - name: Verify we're on a master node
+      assert:
+        that:
+          - "'masters' in group_names"
+        fail_msg: "This playbook must run on master nodes only"
+        success_msg: "Running on master node"
+
+    - name: Check if kubectl is configured
+      command: kubectl cluster-info
+      register: kubectl_check
+      changed_when: false
+      failed_when: kubectl_check.rc != 0
+
+    - name: Display cluster info
+      debug:
+        msg: "Connected to Kubernetes cluster"
+
+  # =========================================================================
+  # ROLES
+  # =========================================================================
+  roles:
+    - role: argocd
+      tags:
+        - argocd
+        - deploy
+        - phase6
+        - gitops
+
+  # =========================================================================
+  # POST-TASKS
+  # =========================================================================
+  post_tasks:
+    - name: Wait for ArgoCD pods to stabilize
+      pause:
+        seconds: 15
+        prompt: "Waiting for ArgoCD pods to stabilize..."
+
+    - name: Get final pod status
+      command: kubectl get pods -n {{ argocd_namespace }} -o wide
+      register: final_pods
+      changed_when: false
+
+    - name: Display final pod status
+      debug:
+        msg: "{{ final_pods.stdout_lines }}"
+
+    - name: Count Running pods
+      shell: |
+        kubectl get pods -n {{ argocd_namespace }} -o json | \
+        jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' | wc -l
+      register: running_pods_count
+      changed_when: false
+
+    - name: Count total pods
+      shell: |
+        kubectl get pods -n {{ argocd_namespace }} -o json | \
+        jq -r '.items[] | .metadata.name' | wc -l
+      register: total_pods_count
+      changed_when: false
+
+    - name: Display deployment statistics
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "  Deployment Statistics"
+          - "================================================================"
+          - "  Pods Running: {{ running_pods_count.stdout | trim }}/{{ total_pods_count.stdout | trim }}"
+          - "  Namespace: {{ argocd_namespace }}"
+          - ""
+
+    - name: Get ArgoCD service endpoints
+      command: kubectl get svc -n {{ argocd_namespace }} -o wide
+      register: services
+      changed_when: false
+
+    - name: Display services
+      debug:
+        msg:
+          - ""
+          - "ArgoCD Services:"
+          - "{{ services.stdout_lines }}"
+
+    - name: Create verification summary
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "                                                                "
+          - "         ArgoCD Deployment Completed!                           "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "Quick Start Guide:"
+          - ""
+          - "1. Access ArgoCD Web UI:"
+          - "   http://{{ argocd_domain }}"
+          - ""
+          - "2. Login credentials:"
+          - "   Username: admin"
+          - "   Password: (see output above from argocd role)"
+          - ""
+          - "3. CLI Login:"
+          - "   argocd login {{ argocd_domain }} --insecure"
+          - ""
+          - "4. First steps:"
+          - "   - Change admin password"
+          - "   - Add your GitOps repository"
+          - "   - Create your first Application"
+          - "   - Set up multi-environment management"
+          - ""
+          - "Documentation:"
+          - "   - Article 17: GitOps with ArgoCD (docs/articles/)"
+          - "   - GitOps Repo: gitops/"
+          - "   - ArgoCD Docs: https://argo-cd.readthedocs.io/"
+          - ""
+          - "Useful Commands:"
+          - "   kubectl get all -n {{ argocd_namespace }}"
+          - "   argocd app list"
+          - "   argocd app get <app-name>"
+          - "   argocd app sync <app-name>"
+          - ""
+          - "IMPORTANT:"
+          - "   - Change the admin password immediately!"
+          - "   - Save credentials securely"
+          - ""
+          - "Next Phase:"
+          - "   Set up GitOps repository (gitops/)"
+          - "   Deploy applications with ArgoCD"
+          - ""
+
+    - name: Save deployment information to file
+      copy:
+        content: |
+          # ArgoCD Deployment Information
+          # Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Access Information
+          - ArgoCD URL: http://{{ argocd_domain }}
+          - Username: admin
+          - Password: Retrieved from Kubernetes secret
+
+          ## Retrieve Password
+          ```bash
+          kubectl -n {{ argocd_namespace }} get secret argocd-initial-admin-secret \
+            -o jsonpath="{.data.password}" | base64 --decode; echo
+          ```
+
+          ## Deployment Details
+          - Namespace: {{ argocd_namespace }}
+          - Release: {{ argocd_release_name }}
+          - Deployment Date: {{ ansible_date_time.date }}
+          - Deployed By: {{ ansible_user_id }}
+          - Ansible Host: {{ inventory_hostname }}
+
+          ## Verification Commands
+          ```bash
+          # Check pods
+          kubectl get pods -n {{ argocd_namespace }}
+
+          # Check services
+          kubectl get svc -n {{ argocd_namespace }}
+
+          # Check ingress
+          kubectl get ingress -n {{ argocd_namespace }}
+
+          # CLI status
+          argocd app list
+          ```
+
+          ## Next Steps
+          1. Access ArgoCD and change admin password
+          2. Add GitOps repository
+          3. Deploy first application
+          4. Set up multi-environment management
+          5. Configure hybrid CI/CD + GitOps workflow
+
+          ## Documentation
+          - Article 17: docs/articles/Article-17-GitOps-ArgoCD.md
+          - Role README: ansible/roles/argocd/README.md
+          - Manifests: Kubernetes/manifests/argocd/
+          - GitOps Repository: gitops/
+        dest: "/tmp/argocd-deployment-info-{{ ansible_date_time.epoch }}.md"
+        mode: '0644'
+
+    - name: Display deployment info file location
+      debug:
+        msg: "Deployment information saved to: /tmp/argocd-deployment-info-{{ ansible_date_time.epoch }}.md"

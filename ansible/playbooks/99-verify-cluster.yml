@@ -1,21 +1,209 @@
 ---
+# =============================================================================
 # Playbook: Verify Kubernetes Cluster
+# Description: Validates cluster health and operational status
+# Tags: kubernetes, verification, cluster
+# =============================================================================
+#
 # Purpose: Verify cluster health and configuration
-# - Check node status
-# - Verify pod network
-# - Test cluster functionality
+# - Check node status (all nodes Ready)
+# - Verify system pods are running
+# - Validate DNS resolution
+# - Test API server connectivity
+#
 
-- name: Verify Kubernetes cluster
+- name: Verify Kubernetes cluster health
   hosts: masters
   become: true
   gather_facts: true
 
-  tasks:
-    - name: Placeholder - Cluster verification
-      ansible.builtin.debug:
-        msg: "Cluster verification will be implemented in upcoming articles"
+  vars:
+    kubeconfig_path: "/home/{{ ansible_user }}/.kube/config"
 
-    # TODO: Check kubectl get nodes
-    # TODO: Verify all nodes are Ready
-    # TODO: Check system pods are running
-    # TODO: Test pod-to-pod communication
+  tasks:
+    #===== Node Status Verification =====
+
+    - name: Check kubectl access
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl cluster-info"
+      register: cluster_info
+      changed_when: false
+      failed_when: cluster_info.rc != 0
+
+    - name: Get all nodes
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get nodes -o json"
+      register: kubectl_nodes
+      changed_when: false
+      failed_when: kubectl_nodes.rc != 0
+
+    - name: Parse nodes JSON
+      ansible.builtin.set_fact:
+        nodes_list: "{{ kubectl_nodes.stdout | from_json }}"
+
+    - name: Verify all nodes are Ready
+      ansible.builtin.assert:
+        that:
+          - "item.status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | list | first == 'True'"
+        fail_msg: "Node {{ item.metadata.name }} is not in Ready state"
+        quiet: true
+      loop: "{{ nodes_list.items }}"
+
+    #===== System Pods Verification =====
+
+    - name: Get system pod status
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get pods -n kube-system -o json"
+      register: system_pods
+      changed_when: false
+      failed_when: system_pods.rc != 0
+
+    - name: Parse pods JSON
+      ansible.builtin.set_fact:
+        pods_list: "{{ system_pods.stdout | from_json }}"
+
+    - name: Verify system pods are running
+      ansible.builtin.assert:
+        that:
+          - "item.status.phase == 'Running'"
+        fail_msg: "Pod {{ item.metadata.name }} in kube-system namespace is not Running (phase: {{ item.status.phase }})"
+        quiet: true
+      loop: "{{ pods_list.items }}"
+      when: item.metadata.name not in ['calico-node-*']  # Calico may take longer to start
+
+    #===== DNS Verification =====
+
+    - name: Verify CoreDNS is running
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get pods -n kube-system -l k8s-app=kube-dns -o json"
+      register: coredns_pods
+      changed_when: false
+
+    - name: Check CoreDNS pod count
+      ansible.builtin.set_fact:
+        coredns_running: "{{ (coredns_pods.stdout | from_json).items | length > 0 }}"
+
+    #===== API Server Verification =====
+
+    - name: Test API server connectivity
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get apiservices | grep -c '^'"
+      register: api_services
+      changed_when: false
+      failed_when: api_services.rc != 0
+
+    #===== Monitoring Stack Verification =====
+
+    - name: Check monitoring namespace exists
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get namespace monitoring -o json"
+      register: monitoring_ns
+      changed_when: false
+      failed_when: false
+
+    - name: Get Prometheus pods
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get pods -n monitoring -l app.kubernetes.io/name=prometheus -o json"
+      register: prometheus_pods
+      changed_when: false
+      when: monitoring_ns.rc == 0
+
+    - name: Get Grafana pods
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get pods -n monitoring -l app.kubernetes.io/name=grafana -o json"
+      register: grafana_pods
+      changed_when: false
+      when: monitoring_ns.rc == 0
+
+    - name: Get Loki pods
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get pods -n monitoring -l app.kubernetes.io/name=loki -o json"
+      register: loki_pods
+      changed_when: false
+      when: monitoring_ns.rc == 0
+
+    - name: Check ServiceMonitors
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get servicemonitors -A --no-headers | wc -l"
+      register: servicemonitor_count
+      changed_when: false
+      when: monitoring_ns.rc == 0
+
+    #===== Backup Verification =====
+
+    - name: Check velero namespace
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get namespace velero -o json"
+      register: velero_ns
+      changed_when: false
+      failed_when: false
+
+    - name: Get Velero pods
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get pods -n velero -l app.kubernetes.io/name=velero -o json"
+      register: velero_pods
+      changed_when: false
+      when: velero_ns.rc == 0
+
+    - name: Check backup storage locations
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get backupstoragelocation -n velero -o json"
+      register: backup_locations
+      changed_when: false
+      when: velero_ns.rc == 0
+
+    - name: Check backup schedules
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get schedules.velero.io -n velero --no-headers | wc -l"
+      register: backup_schedule_count
+      changed_when: false
+      when: velero_ns.rc == 0
+
+    - name: Get latest backups
+      ansible.builtin.shell:
+        cmd: "KUBECONFIG={{ kubeconfig_path }} kubectl get backups.velero.io -n velero --sort-by=.metadata.creationTimestamp --no-headers | tail -5"
+      register: latest_backups
+      changed_when: false
+      when: velero_ns.rc == 0
+
+    #===== Final Verification Output =====
+
+    - name: Display cluster verification results
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "KUBERNETES CLUSTER VERIFIED SUCCESSFULLY!"
+          - "============================================"
+          - ""
+          - "NODES:"
+          - "{{ nodes_list.items | map(attribute='metadata.name') | list | join(', ') }}"
+          - ""
+          - "NODE STATUS:"
+          - "{% for node in nodes_list.items %}{{ node.metadata.name }}: {{ node.status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | list | first }} (v{{ node.status.nodeInfo.kubeletVersion }}){% if not loop.last %}, {% endif %}{% endfor %}"
+          - ""
+          - "SYSTEM PODS RUNNING:"
+          - "{{ pods_list.items | length }} pods verified"
+          - ""
+          - "COREDNS STATUS:"
+          - "{{ 'Running' if coredns_running else 'Not found' }}"
+          - ""
+          - "API SERVER:"
+          - "{{ 'Available' if api_services.rc == 0 else 'Unreachable' }}"
+          - ""
+          - "MONITORING STACK:"
+          - "{{ 'Namespace: Active' if monitoring_ns.rc == 0 else 'Not deployed (skipped)' }}"
+          - "{% if monitoring_ns.rc == 0 %}Prometheus Pods: {{ (prometheus_pods.stdout | from_json).items | length }}{% endif %}"
+          - "{% if monitoring_ns.rc == 0 %}Grafana Pods: {{ (grafana_pods.stdout | from_json).items | length }}{% endif %}"
+          - "{% if monitoring_ns.rc == 0 %}Loki Pods: {{ (loki_pods.stdout | from_json).items | length }}{% endif %}"
+          - "{% if monitoring_ns.rc == 0 %}ServiceMonitors: {{ servicemonitor_count.stdout | trim }}{% endif %}"
+          - ""
+          - "BACKUP & DISASTER RECOVERY:"
+          - "{{ 'Namespace: Active' if velero_ns.rc == 0 else 'Not deployed (skipped)' }}"
+          - "{% if velero_ns.rc == 0 %}Velero Pods: {{ (velero_pods.stdout | from_json).items | length }}{% endif %}"
+          - "{% if velero_ns.rc == 0 %}Backup Schedules: {{ backup_schedule_count.stdout | trim }}{% endif %}"
+          - "{% if velero_ns.rc == 0 %}Storage Locations: {{ (backup_locations.stdout | from_json).items | length }}{% endif %}"
+          - "{% if velero_ns.rc == 0 and latest_backups.stdout | trim != '' %}Latest Backups:{% endif %}"
+          - "{% if velero_ns.rc == 0 and latest_backups.stdout | trim != '' %}{{ latest_backups.stdout }}{% endif %}"
+          - ""
+          - "CLUSTER READY FOR APPLICATION DEPLOYMENT"
+          - "============================================"

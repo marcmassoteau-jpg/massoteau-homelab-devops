@@ -1,0 +1,339 @@
+---
+# ============================================================================
+# Playbook: Deploy GitLab on Kubernetes
+# Article: 13 - GitLab Deployment on Kubernetes with Helm
+# Phase: 4 - Self-Hosted GitLab
+# ============================================================================
+#
+# Description:
+#   Deploys GitLab Community Edition on an existing Kubernetes cluster using
+#   the official Helm chart. This playbook is part of Phase 4 of the
+#   Kubernetes Homelab Automation project.
+#
+# Prerequisites:
+#   - Phase 3 complete (Kubernetes cluster operational)
+#   - kubectl configured on master node
+#   - Helm 3 installed
+#   - Storage class available (local-path-provisioner)
+#   - Traefik ingress controller operational
+#   - Sufficient resources: 8GB RAM, 4 CPUs, 120GB storage
+#
+# Usage:
+#   ansible-playbook playbooks/05-deploy-gitlab.yml
+#
+#   With custom domain:
+#   ansible-playbook playbooks/05-deploy-gitlab.yml \
+#     -e gitlab_domain=git.example.com
+#
+#   Force redeploy:
+#   ansible-playbook playbooks/05-deploy-gitlab.yml \
+#     -e gitlab_force_redeploy=true
+#
+# What This Playbook Does:
+#   1. Verifies cluster prerequisites (kubectl, Helm, storage)
+#   2. Creates GitLab namespace with ResourceQuota
+#   3. Adds GitLab Helm repository
+#   4. Deploys GitLab using homelab-optimized values
+#   5. Waits for all pods to be Running
+#   6. Retrieves initial root password
+#   7. Verifies GitLab health endpoint
+#   8. Displays access information
+#
+# Components Deployed:
+#   - GitLab Webservice (Rails application)
+#   - GitLab Sidekiq (background jobs)
+#   - GitLab Shell (SSH for Git)
+#   - Gitaly (Git repository storage)
+#   - PostgreSQL (database)
+#   - Redis (cache)
+#   - Container Registry
+#   - MinIO (S3-compatible object storage)
+#
+# After Deployment:
+#   - Access GitLab at: http://gitlab.homelab.local:30080
+#   - Username: root
+#   - Password: (displayed at end of playbook)
+#   - IMPORTANT: Change root password after first login!
+#
+# Next Steps:
+#   - Article 14: Deploy GitLab Runner for CI/CD
+#   - Create your first project
+#   - Configure container registry
+#   - Set up CI/CD pipelines
+#
+# ============================================================================
+
+- name: Deploy GitLab on Kubernetes
+  hosts: masters
+  become: yes
+  gather_facts: yes
+
+  # =========================================================================
+  # VARIABLES
+  # =========================================================================
+  vars:
+    # Core configuration
+    gitlab_namespace: gitlab
+    gitlab_release_name: gitlab
+    gitlab_domain: gitlab.homelab.local
+
+    # Display banner
+    display_banner: true
+
+  # =========================================================================
+  # PRE-TASKS
+  # =========================================================================
+  pre_tasks:
+    - name: Display deployment banner
+      when: display_banner
+      debug:
+        msg:
+          - "╔════════════════════════════════════════════════════════════╗"
+          - "║                                                            ║"
+          - "║           GitLab Deployment on Kubernetes                  ║"
+          - "║         Phase 4: Self-Hosted GitLab Platform               ║"
+          - "║                                                            ║"
+          - "╚════════════════════════════════════════════════════════════╝"
+          - ""
+          - "This playbook will deploy GitLab Community Edition on your"
+          - "Kubernetes cluster with the following components:"
+          - ""
+          - "  • GitLab Web UI and API"
+          - "  • Container Registry"
+          - "  • PostgreSQL Database"
+          - "  • Redis Cache"
+          - "  • Git Repository Storage (Gitaly)"
+          - "  • Object Storage (MinIO)"
+          - ""
+          - "Deployment time: 10-15 minutes"
+          - "Namespace: {{ gitlab_namespace }}"
+          - "Domain: {{ gitlab_domain }}"
+          - ""
+
+    - name: Verify we're on a master node
+      assert:
+        that:
+          - "'masters' in group_names"
+        fail_msg: "This playbook must run on master nodes only"
+        success_msg: "✓ Running on master node"
+
+    - name: Check if kubectl is configured
+      command: kubectl cluster-info
+      register: kubectl_check
+      changed_when: false
+      failed_when: kubectl_check.rc != 0
+
+    - name: Display cluster info
+      debug:
+        msg: "✓ Connected to Kubernetes cluster"
+
+  # =========================================================================
+  # ROLES
+  # =========================================================================
+  roles:
+    - role: gitlab
+      tags:
+        - gitlab
+        - deploy
+        - phase4
+
+  # =========================================================================
+  # POST-TASKS
+  # =========================================================================
+  post_tasks:
+    - name: Wait for all GitLab pods to stabilize
+      pause:
+        seconds: 30
+        prompt: "Waiting for GitLab pods to stabilize..."
+
+    - name: Get final pod status
+      command: kubectl get pods -n {{ gitlab_namespace }} -o wide
+      register: final_pods
+      changed_when: false
+
+    - name: Display final pod status
+      debug:
+        msg: "{{ final_pods.stdout_lines }}"
+
+    - name: Count Running pods
+      shell: |
+        kubectl get pods -n {{ gitlab_namespace }} -o json | \
+        jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' | wc -l
+      register: running_pods_count
+      changed_when: false
+
+    - name: Count total pods
+      shell: |
+        kubectl get pods -n {{ gitlab_namespace }} -o json | \
+        jq -r '.items[] | .metadata.name' | wc -l
+      register: total_pods_count
+      changed_when: false
+
+    - name: Display deployment statistics
+      debug:
+        msg:
+          - ""
+          - "════════════════════════════════════════════════════════"
+          - "  Deployment Statistics"
+          - "════════════════════════════════════════════════════════"
+          - "  Pods Running: {{ running_pods_count.stdout | trim }}/{{ total_pods_count.stdout | trim }}"
+          - "  Namespace: {{ gitlab_namespace }}"
+          - "  Storage Used: Check with 'kubectl get pvc -n {{ gitlab_namespace }}'"
+          - ""
+
+    - name: Check PVC status
+      command: kubectl get pvc -n {{ gitlab_namespace }}
+      register: pvc_status
+      changed_when: false
+
+    - name: Display PVC status
+      debug:
+        msg: "{{ pvc_status.stdout_lines }}"
+
+    - name: Get GitLab service endpoints
+      command: kubectl get svc -n {{ gitlab_namespace }} -o wide
+      register: services
+      changed_when: false
+
+    - name: Display services
+      debug:
+        msg:
+          - ""
+          - "GitLab Services:"
+          - "{{ services.stdout_lines }}"
+
+    - name: Test GitLab web UI accessibility
+      uri:
+        url: "http://{{ gitlab_domain }}:30080/-/health"
+        status_code: 200
+        timeout: 10
+      register: gitlab_health
+      retries: 5
+      delay: 10
+      until: gitlab_health.status == 200
+      failed_when: false
+      changed_when: false
+
+    - name: Display accessibility status
+      debug:
+        msg:
+          - ""
+          - "GitLab Web UI: {{ 'ACCESSIBLE ✓' if gitlab_health.status == 200 else 'NOT READY (may need more time)' }}"
+
+    - name: Create verification summary
+      debug:
+        msg:
+          - ""
+          - "╔════════════════════════════════════════════════════════════╗"
+          - "║                                                            ║"
+          - "║         GitLab Deployment Completed!                       ║"
+          - "║                                                            ║"
+          - "╚════════════════════════════════════════════════════════════╝"
+          - ""
+          - "📋 Quick Start Guide:"
+          - ""
+          - "1. Access GitLab Web UI:"
+          - "   http://{{ gitlab_domain }}:30080"
+          - ""
+          - "2. Login credentials:"
+          - "   Username: root"
+          - "   Password: (see output above from gitlab role)"
+          - ""
+          - "3. First steps:"
+          - "   • Change root password"
+          - "   • Create admin user"
+          - "   • Create your first project"
+          - "   • Test Git push/pull"
+          - ""
+          - "4. Container Registry:"
+          - "   http://registry.{{ gitlab_domain }}:30080"
+          - "   docker login registry.{{ gitlab_domain }}:30080"
+          - ""
+          - "5. MinIO Console:"
+          - "   http://minio.{{ gitlab_domain }}:30080"
+          - ""
+          - "📚 Documentation:"
+          - "   • Article 13: GitLab Deployment (docs/articles/)"
+          - "   • Article 14: GitLab CI/CD and Runner"
+          - "   • GitLab Docs: https://docs.gitlab.com"
+          - ""
+          - "🔧 Useful Commands:"
+          - "   kubectl get all -n {{ gitlab_namespace }}"
+          - "   kubectl logs -n {{ gitlab_namespace }} <pod-name>"
+          - "   kubectl get pvc -n {{ gitlab_namespace }}"
+          - "   helm list -n {{ gitlab_namespace }}"
+          - ""
+          - "⚠️  IMPORTANT:"
+          - "   • Change the root password immediately!"
+          - "   • Save credentials securely"
+          - "   • Configure backups (see Article 13)"
+          - ""
+          - "✨ Next Phase:"
+          - "   Deploy GitLab Runner for CI/CD (Article 14)"
+          - "   ansible-playbook playbooks/06-deploy-gitlab-runner.yml"
+          - ""
+
+    - name: Save deployment information to file
+      copy:
+        content: |
+          # GitLab Deployment Information
+          # Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Access Information
+          - GitLab URL: http://{{ gitlab_domain }}:30080
+          - Registry URL: http://registry.{{ gitlab_domain }}:30080
+          - MinIO URL: http://minio.{{ gitlab_domain }}:30080
+          - Username: root
+          - Password: Retrieved from Kubernetes secret
+
+          ## Retrieve Password
+          ```bash
+          kubectl get secret gitlab-gitlab-initial-root-password \
+            -n {{ gitlab_namespace }} \
+            -o jsonpath="{.data.password}" | base64 --decode; echo
+          ```
+
+          ## Deployment Details
+          - Namespace: {{ gitlab_namespace }}
+          - Release: {{ gitlab_release_name }}
+          - Deployment Date: {{ ansible_date_time.date }}
+          - Deployed By: {{ ansible_user_id }}
+          - Ansible Host: {{ inventory_hostname }}
+
+          ## Verification Commands
+          ```bash
+          # Check pods
+          kubectl get pods -n {{ gitlab_namespace }}
+
+          # Check services
+          kubectl get svc -n {{ gitlab_namespace }}
+
+          # Check PVCs
+          kubectl get pvc -n {{ gitlab_namespace }}
+
+          # Check health
+          curl http://{{ gitlab_domain }}:30080/-/health
+
+          # View Helm release
+          helm list -n {{ gitlab_namespace }}
+          ```
+
+          ## Next Steps
+          1. Access GitLab and change root password
+          2. Create first project
+          3. Deploy GitLab Runner (Article 14)
+          4. Set up CI/CD pipeline
+          5. Configure container registry
+          6. Set up automated backups
+
+          ## Documentation
+          - Article 13: docs/articles/Article-13-GitLab-Deployment.md
+          - Article 14: docs/articles/Article-14-GitLab-CICD.md
+          - Role README: ansible/roles/gitlab/README.md
+          - Manifests: Kubernetes/manifests/gitlab/
+        dest: "/tmp/gitlab-deployment-info-{{ ansible_date_time.epoch }}.md"
+        mode: '0644'
+
+    - name: Display deployment info file location
+      debug:
+        msg: "Deployment information saved to: /tmp/gitlab-deployment-info-{{ ansible_date_time.epoch }}.md"

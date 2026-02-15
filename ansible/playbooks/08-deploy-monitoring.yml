@@ -1,0 +1,304 @@
+---
+# ============================================================================
+# Playbook: Deploy Monitoring Stack on Kubernetes
+# Article: 18 - Complete Observability Stack
+# Phase: 7 - Observability & Monitoring
+# ============================================================================
+#
+# Description:
+#   Deploys the complete observability stack (Prometheus, Grafana, Loki, Promtail)
+#   on an existing Kubernetes cluster using Helm charts. Provides metrics collection,
+#   visualization, log aggregation, and alerting for the entire homelab.
+#
+# Prerequisites:
+#   - Phase 6 complete (Kubernetes cluster with GitOps operational)
+#   - kubectl configured on master node
+#   - Helm 3 installed
+#   - Traefik ingress controller operational
+#   - Sufficient resources: 2GB RAM, 1.5 CPUs available
+#
+# Usage:
+#   ansible-playbook playbooks/08-deploy-monitoring.yml
+#
+#   With custom domain:
+#   ansible-playbook playbooks/08-deploy-monitoring.yml \
+#     -e monitoring_grafana_domain=grafana.example.com
+#
+#   Force redeploy:
+#   ansible-playbook playbooks/08-deploy-monitoring.yml \
+#     -e monitoring_force_redeploy=true
+#
+# What This Playbook Does:
+#   1. Verifies cluster prerequisites (kubectl, Helm)
+#   2. Creates monitoring namespace
+#   3. Adds Prometheus and Grafana Helm repositories
+#   4. Deploys Prometheus stack (Prometheus, AlertManager, Node Exporter)
+#   5. Deploys Grafana with pre-configured dashboards
+#   6. Deploys Loki for log aggregation
+#   7. Deploys Promtail for log collection
+#   8. Waits for all pods to be Running
+#   9. Displays access information and credentials
+#
+# Components Deployed:
+#   - Prometheus (metrics collection and storage)
+#   - Grafana (visualization and dashboards)
+#   - AlertManager (alert routing and notifications)
+#   - Loki (log aggregation)
+#   - Promtail (log collection agent)
+#   - Node Exporter (host metrics)
+#   - Kube State Metrics (Kubernetes object metrics)
+#
+# After Deployment:
+#   - Access Grafana at: http://grafana.homelab.local
+#   - Access Prometheus at: http://prometheus.homelab.local
+#   - Access AlertManager at: http://alertmanager.homelab.local
+#   - Grafana Username: admin
+#   - Grafana Password: (displayed at end of playbook)
+#   - IMPORTANT: Change Grafana admin password after first login!
+#
+# Next Steps:
+#   - Configure alerting rules for your services
+#   - Import custom Grafana dashboards
+#   - Set up notification channels (email, Slack)
+#   - Tune retention and storage settings
+#
+# ============================================================================
+
+- name: Deploy Monitoring Stack on Kubernetes
+  hosts: masters
+  become: yes
+  gather_facts: yes
+
+  # =========================================================================
+  # VARIABLES
+  # =========================================================================
+  vars:
+    # Core configuration
+    monitoring_namespace: monitoring
+    monitoring_grafana_domain: grafana.homelab.local
+    monitoring_prometheus_domain: prometheus.homelab.local
+    monitoring_alertmanager_domain: alertmanager.homelab.local
+
+    # Display banner
+    display_banner: true
+
+  # =========================================================================
+  # PRE-TASKS
+  # =========================================================================
+  pre_tasks:
+    - name: Display deployment banner
+      when: display_banner
+      debug:
+        msg:
+          - "================================================================"
+          - "                                                                "
+          - "       Observability Stack Deployment on Kubernetes             "
+          - "         Phase 7: Observability & Monitoring                    "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "This playbook will deploy the complete observability stack"
+          - "on your Kubernetes cluster for metrics, logs, and alerting."
+          - ""
+          - "Components:"
+          - "  - Prometheus (metrics collection and storage)"
+          - "  - Grafana (visualization and dashboards)"
+          - "  - AlertManager (alert routing)"
+          - "  - Loki (log aggregation)"
+          - "  - Promtail (log collection)"
+          - "  - Node Exporter (host metrics)"
+          - "  - Kube State Metrics (Kubernetes metrics)"
+          - ""
+          - "Deployment time: 5-8 minutes"
+          - "Namespace: {{ monitoring_namespace }}"
+          - "Grafana URL: http://{{ monitoring_grafana_domain }}"
+          - "Prometheus URL: http://{{ monitoring_prometheus_domain }}"
+          - "AlertManager URL: http://{{ monitoring_alertmanager_domain }}"
+          - ""
+
+    - name: Verify we're on a master node
+      assert:
+        that:
+          - "'masters' in group_names"
+        fail_msg: "This playbook must run on master nodes only"
+        success_msg: "Running on master node"
+
+    - name: Check if kubectl is configured
+      command: kubectl cluster-info
+      register: kubectl_check
+      changed_when: false
+      failed_when: kubectl_check.rc != 0
+
+    - name: Display cluster info
+      debug:
+        msg: "Connected to Kubernetes cluster"
+
+  # =========================================================================
+  # ROLES
+  # =========================================================================
+  roles:
+    - role: monitoring
+      tags:
+        - monitoring
+        - deploy
+        - phase7
+        - observability
+
+  # =========================================================================
+  # POST-TASKS
+  # =========================================================================
+  post_tasks:
+    - name: Wait for monitoring pods to stabilize
+      pause:
+        seconds: 15
+        prompt: "Waiting for monitoring pods to stabilize..."
+
+    - name: Get final pod status
+      command: kubectl get pods -n {{ monitoring_namespace }} -o wide
+      register: final_pods
+      changed_when: false
+
+    - name: Display final pod status
+      debug:
+        msg: "{{ final_pods.stdout_lines }}"
+
+    - name: Count Running pods
+      shell: |
+        kubectl get pods -n {{ monitoring_namespace }} -o json | \
+        jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' | wc -l
+      register: running_pods_count
+      changed_when: false
+
+    - name: Count total pods
+      shell: |
+        kubectl get pods -n {{ monitoring_namespace }} -o json | \
+        jq -r '.items[] | .metadata.name' | wc -l
+      register: total_pods_count
+      changed_when: false
+
+    - name: Get monitoring service endpoints
+      command: kubectl get svc -n {{ monitoring_namespace }} -o wide
+      register: services
+      changed_when: false
+
+    - name: Display services
+      debug:
+        msg:
+          - ""
+          - "Monitoring Services:"
+          - "{{ services.stdout_lines }}"
+
+    - name: Display deployment statistics
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "  Deployment Statistics"
+          - "================================================================"
+          - "  Pods Running: {{ running_pods_count.stdout | trim }}/{{ total_pods_count.stdout | trim }}"
+          - "  Namespace: {{ monitoring_namespace }}"
+          - ""
+
+    - name: Display access information
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "                                                                "
+          - "       Monitoring Stack Deployment Completed!                   "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "Access Information:"
+          - ""
+          - "1. Grafana Web UI:"
+          - "   URL: http://{{ monitoring_grafana_domain }}"
+          - "   Username: admin"
+          - "   Password: (see output above from monitoring role)"
+          - ""
+          - "2. Prometheus Web UI:"
+          - "   URL: http://{{ monitoring_prometheus_domain }}"
+          - ""
+          - "3. AlertManager Web UI:"
+          - "   URL: http://{{ monitoring_alertmanager_domain }}"
+          - ""
+          - "4. Useful Commands:"
+          - "   kubectl get all -n {{ monitoring_namespace }}"
+          - "   kubectl get servicemonitors -A"
+          - "   kubectl logs -n {{ monitoring_namespace }} -l app.kubernetes.io/name=prometheus"
+          - "   kubectl logs -n {{ monitoring_namespace }} -l app.kubernetes.io/name=grafana"
+          - ""
+          - "IMPORTANT:"
+          - "   - Change the Grafana admin password immediately!"
+          - "   - Save credentials securely"
+          - ""
+          - "Documentation:"
+          - "   - Article 18: docs/articles/Article-18-Monitoring-Stack.md"
+          - "   - Role README: ansible/roles/monitoring/README.md"
+          - ""
+          - "Next Steps:"
+          - "   - Import custom dashboards into Grafana"
+          - "   - Configure alerting rules"
+          - "   - Set up notification channels"
+          - "   - Tune retention and resource limits"
+          - ""
+
+    - name: Save deployment information to file
+      copy:
+        content: |
+          # Monitoring Stack Deployment Information
+          # Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Access Information
+          - Grafana URL: http://{{ monitoring_grafana_domain }}
+          - Prometheus URL: http://{{ monitoring_prometheus_domain }}
+          - AlertManager URL: http://{{ monitoring_alertmanager_domain }}
+          - Grafana Username: admin
+          - Grafana Password: Retrieved from Kubernetes secret
+
+          ## Retrieve Grafana Password
+          ```bash
+          kubectl -n {{ monitoring_namespace }} get secret monitoring-grafana \
+            -o jsonpath="{.data.admin-password}" | base64 --decode; echo
+          ```
+
+          ## Deployment Details
+          - Namespace: {{ monitoring_namespace }}
+          - Deployment Date: {{ ansible_date_time.date }}
+          - Deployed By: {{ ansible_user_id }}
+          - Ansible Host: {{ inventory_hostname }}
+
+          ## Verification Commands
+          ```bash
+          # Check pods
+          kubectl get pods -n {{ monitoring_namespace }}
+
+          # Check services
+          kubectl get svc -n {{ monitoring_namespace }}
+
+          # Check ingress
+          kubectl get ingress -n {{ monitoring_namespace }}
+
+          # Check ServiceMonitors
+          kubectl get servicemonitors -A
+
+          # Check PrometheusRules
+          kubectl get prometheusrules -A
+          ```
+
+          ## Next Steps
+          1. Access Grafana and change admin password
+          2. Import custom dashboards
+          3. Configure alerting rules
+          4. Set up notification channels (email, Slack)
+          5. Tune retention and storage settings
+
+          ## Documentation
+          - Article 18: docs/articles/Article-18-Monitoring-Stack.md
+          - Role README: ansible/roles/monitoring/README.md
+        dest: "/tmp/monitoring-deployment-info-{{ ansible_date_time.epoch }}.md"
+        mode: '0644'
+
+    - name: Display deployment info file location
+      debug:
+        msg: "Deployment information saved to: /tmp/monitoring-deployment-info-{{ ansible_date_time.epoch }}.md"

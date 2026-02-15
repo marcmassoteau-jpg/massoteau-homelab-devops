@@ -1,0 +1,14 @@
+---
+# Cluster Autoscaler Role - Handlers
+
+- name: Restart autoscaler
+  ansible.builtin.command: >
+    kubectl rollout restart cronjob/cluster-autoscaler-check
+    -n {{ cluster_autoscaler_namespace }}
+  listen: "restart autoscaler"
+
+- name: Restart scale-down checker
+  ansible.builtin.command: >
+    kubectl rollout restart cronjob/cluster-autoscaler-scale-down
+    -n {{ cluster_autoscaler_namespace }}
+  listen: "restart autoscaler"

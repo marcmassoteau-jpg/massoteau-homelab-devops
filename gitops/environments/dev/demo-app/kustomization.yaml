@@ -1,0 +1,44 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: demo-dev
+
+resources:
+  - ../../../base/demo-app
+
+# Dev-specific patches
+patches:
+  - target:
+      kind: Deployment
+      name: demo-app
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "development"
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: "debug"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "25m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "32Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "100m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "128Mi"
+
+commonLabels:
+  environment: dev
+
+images:
+  - name: demo-app
+    newName: registry.gitlab.homelab.local:30080/homelab/demo-app
+    newTag: dev-latest

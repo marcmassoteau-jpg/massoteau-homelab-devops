@@ -1,0 +1,14 @@
+---
+# Jenkins Role - Handlers
+
+- name: Restart Jenkins controller
+  command: kubectl rollout restart deployment {{ jenkins_release_name }} -n {{ jenkins_namespace }}
+  listen: "restart jenkins"
+
+- name: Reload Jenkins configuration
+  command: >
+    kubectl exec -n {{ jenkins_namespace }}
+    deployment/{{ jenkins_release_name }}
+    -- curl -X POST http://localhost:8080/reload
+  listen: "reload jenkins"
+  failed_when: false

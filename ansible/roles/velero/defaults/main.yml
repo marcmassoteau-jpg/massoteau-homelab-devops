@@ -1,0 +1,99 @@
+---
+# Velero Backup & Disaster Recovery Role - Default Variables
+# Override these in your playbook or inventory
+
+#=============================================================================
+# GENERAL CONFIGURATION
+#=============================================================================
+
+# Velero release configuration
+velero_namespace: velero
+velero_release_name: velero
+velero_chart_repo: https://vmware-tanzu.github.io/helm-charts
+velero_chart_name: velero
+velero_chart_version: "7.2.1"
+
+# AWS plugin version (for S3-compatible storage)
+velero_aws_plugin_version: "v1.10.1"
+
+#=============================================================================
+# MINIO CONFIGURATION
+#=============================================================================
+
+# MinIO S3-compatible storage backend
+velero_minio_url: "http://minio.gitlab.svc:9000"
+velero_minio_bucket: velero-backups
+velero_minio_region: minio
+velero_minio_access_key: ""                 # Set via -e or ansible-vault
+velero_minio_secret_key: ""                 # Set via -e or ansible-vault
+
+#=============================================================================
+# RESOURCE CONFIGURATION
+#=============================================================================
+
+# Velero server resources
+velero_cpu_request: "250m"
+velero_cpu_limit: "1"
+velero_memory_request: "512Mi"
+velero_memory_limit: "1Gi"
+
+#=============================================================================
+# BACKUP CONFIGURATION
+#=============================================================================
+
+# Default backup schedule (daily at 2 AM)
+velero_backup_schedule: "0 2 * * *"
+
+# Backup retention in days
+velero_retention_days: 30
+
+# Default volumes to filesystem backup
+velero_default_volumes_to_fs_backup: true
+
+# Backup schedules to create
+velero_backup_schedules:
+  - name: full-cluster-daily
+    schedule: "{{ velero_backup_schedule }}"
+    ttl: "{{ velero_retention_days * 24 }}h0m0s"
+    include_namespaces: []  # Empty means all namespaces
+  - name: gitlab-hourly
+    schedule: "0 */6 * * *"
+    ttl: "168h0m0s"  # 7 days
+    include_namespaces:
+      - gitlab
+  - name: monitoring-daily
+    schedule: "0 3 * * *"
+    ttl: "336h0m0s"  # 14 days
+    include_namespaces:
+      - monitoring
+
+#=============================================================================
+# FEATURES CONFIGURATION
+#=============================================================================
+
+# Create backup schedules
+velero_create_schedules: true
+
+# Install Velero CLI on the control node
+velero_install_cli: true
+
+# Velero CLI version
+velero_cli_version: "v1.14.0"
+
+#=============================================================================
+# DEPLOYMENT OPTIONS
+#=============================================================================
+
+# Helm deployment options
+velero_helm_timeout: "10m"
+velero_helm_wait: true
+
+# Force redeploy even if already installed
+velero_force_redeploy: false
+
+# Create namespace
+velero_create_namespace: true
+
+# Wait for pods to be ready
+velero_wait_for_ready: true
+velero_ready_timeout: 300  # 5 minutes

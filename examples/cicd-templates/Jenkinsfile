@@ -1,0 +1,497 @@
+// Advanced Jenkins Pipeline with Shared Library
+// Demonstrates reusable shared libraries, matrix builds, dynamic environments, and advanced patterns
+// Mirrors GitLab CI/CD pipeline functionality in Jenkins
+
+@Library('cicd-shared-library') _
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: agent
+spec:
+  containers:
+  - name: node
+    image: node:18-alpine
+    command: ['cat']
+    tty: true
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:debug
+    command: ['sleep']
+    args: ['infinity']
+    volumeMounts:
+    - name: kaniko-secret
+      mountPath: /kaniko/.docker
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ['cat']
+    tty: true
+  - name: trivy
+    image: aquasec/trivy:latest
+    command: ['cat']
+    tty: true
+  volumes:
+  - name: kaniko-secret
+    secret:
+      secretName: registry-credentials
+      items:
+      - key: .dockerconfigjson
+        path: config.json
+"""
+        }
+    }
+
+    environment {
+        CI_REGISTRY = 'registry.gitlab.homelab.local'
+        REGISTRY_IMAGE = "${env.CI_REGISTRY}/${env.JOB_NAME}"
+        DOCKER_DRIVER = 'overlay2'
+        KUBECONFIG = '/etc/deploy/config'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 1, unit: 'HOURS')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        //=================================================
+        // BUILD STAGE
+        //=================================================
+        stage('Build') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                    changeRequest()
+                }
+            }
+            steps {
+                script {
+                    buildApp(
+                        type: 'node',
+                        buildCommand: 'npm ci && npm run build',
+                        outputDir: 'dist'
+                    )
+                }
+            }
+        }
+
+        // Matrix Build Example: Test multiple Node versions
+        stage('Matrix Build') {
+            when {
+                changeRequest()
+            }
+            matrix {
+                axes {
+                    axis {
+                        name 'NODE_VERSION'
+                        values '16', '18', '20'
+                    }
+                    axis {
+                        name 'NODE_IMAGE'
+                        values 'alpine', 'bullseye'
+                    }
+                }
+                agent {
+                    kubernetes {
+                        yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: node
+    image: node:\${NODE_VERSION}-\${NODE_IMAGE}
+    command: ['cat']
+    tty: true
+"""
+                    }
+                }
+                stages {
+                    stage('Build Matrix') {
+                        steps {
+                            container('node') {
+                                script {
+                                    echo "Building with Node ${NODE_VERSION} on ${NODE_IMAGE}"
+                                    sh 'node --version'
+                                    sh 'npm --version'
+                                    sh 'npm ci'
+                                    sh 'npm run build'
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // TEST STAGE
+        //=================================================
+        stage('Test') {
+            parallel {
+                stage('Unit Tests') {
+                    when {
+                        anyOf {
+                            branch 'main'
+                            branch 'develop'
+                        }
+                    }
+                    steps {
+                        script {
+                            testApp(
+                                type: 'node',
+                                testCommand: 'npm ci && npm run test:unit',
+                                coverage: true
+                            )
+                        }
+                    }
+                }
+
+                stage('Integration Tests') {
+                    when {
+                        anyOf {
+                            branch 'main'
+                            branch 'develop'
+                        }
+                    }
+                    agent {
+                        kubernetes {
+                            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: node
+    image: node:18-alpine
+    command: ['cat']
+    tty: true
+  - name: postgres
+    image: postgres:15-alpine
+    env:
+    - name: POSTGRES_DB
+      value: testdb
+    - name: POSTGRES_USER
+      value: testuser
+    - name: POSTGRES_PASSWORD
+      value: testpass
+  - name: redis
+    image: redis:7-alpine
+"""
+                        }
+                    }
+                    steps {
+                        container('node') {
+                            script {
+                                // Wait for services
+                                sh 'sleep 5'
+
+                                withEnv([
+                                    'DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb',
+                                    'REDIS_URL=redis://localhost:6379'
+                                ]) {
+                                    testApp(
+                                        type: 'node',
+                                        testCommand: 'npm ci && npm run test:integration',
+                                        coverage: false
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('E2E Tests') {
+                    when {
+                        changeRequest()
+                    }
+                    steps {
+                        script {
+                            // Manual approval for E2E tests
+                            input message: 'Run E2E tests?', ok: 'Run'
+
+                            testApp(
+                                type: 'node',
+                                testCommand: 'npm ci && npm run test:e2e',
+                                coverage: false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // SECURITY STAGE
+        //=================================================
+        stage('Security') {
+            parallel {
+                stage('Scan Filesystem') {
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'trivy-fs',
+                                severity: 'HIGH,CRITICAL',
+                                allowFailure: false
+                            )
+                        }
+                    }
+                }
+
+                stage('Scan Secrets') {
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'secrets',
+                                allowFailure: false
+                            )
+                        }
+                    }
+                }
+
+                stage('Scan Dependencies') {
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'dependencies',
+                                language: 'node',
+                                allowFailure: true
+                            )
+                        }
+                    }
+                }
+
+                stage('SAST') {
+                    when {
+                        anyOf {
+                            branch 'main'
+                            changeRequest()
+                        }
+                    }
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'sast',
+                                allowFailure: true
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // PACKAGE STAGE
+        //=================================================
+        stage('Package') {
+            stages {
+                stage('Build Docker Image') {
+                    when {
+                        anyOf {
+                            branch 'main'
+                            branch 'develop'
+                        }
+                    }
+                    steps {
+                        script {
+                            unstash 'build-artifacts'
+
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: 'registry-credentials',
+                                    usernameVariable: 'REGISTRY_USER',
+                                    passwordVariable: 'REGISTRY_PASSWORD'
+                                )
+                            ]) {
+                                dockerBuild(
+                                    dockerfile: 'Dockerfile',
+                                    imageName: env.REGISTRY_IMAGE,
+                                    imageTag: env.GIT_COMMIT,
+                                    additionalTags: [env.BRANCH_NAME],
+                                    cache: true
+                                )
+                            }
+                        }
+                    }
+                }
+
+                stage('Build Latest Tag') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        script {
+                            unstash 'build-artifacts'
+
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: 'registry-credentials',
+                                    usernameVariable: 'REGISTRY_USER',
+                                    passwordVariable: 'REGISTRY_PASSWORD'
+                                )
+                            ]) {
+                                dockerBuild(
+                                    dockerfile: 'Dockerfile',
+                                    imageName: env.REGISTRY_IMAGE,
+                                    imageTag: 'latest',
+                                    cache: true
+                                )
+                            }
+                        }
+                    }
+                }
+
+                stage('Scan Container') {
+                    when {
+                        anyOf {
+                            branch 'main'
+                            branch 'develop'
+                        }
+                    }
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'trivy-image',
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                                severity: 'HIGH,CRITICAL',
+                                allowFailure: true
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // DEPLOY STAGE
+        //=================================================
+        stage('Deploy') {
+            parallel {
+                stage('Deploy Dev') {
+                    when {
+                        branch 'develop'
+                    }
+                    steps {
+                        script {
+                            k8sDeploy(
+                                namespace: 'development',
+                                deployment: env.JOB_BASE_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                                replicas: 1
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Review App') {
+                    when {
+                        changeRequest()
+                    }
+                    steps {
+                        script {
+                            k8sDeploy.deployReview(
+                                deployment: env.JOB_BASE_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}"
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Staging') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        script {
+                            k8sDeploy(
+                                namespace: 'staging',
+                                deployment: env.JOB_BASE_NAME,
+                                image: "${env.REGISTRY_IMAGE}:latest",
+                                replicas: 2
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Production') {
+                    when {
+                        anyOf {
+                            branch 'main'
+                            tag pattern: 'v\\d+\\.\\d+\\.\\d+', comparator: 'REGEXP'
+                        }
+                    }
+                    steps {
+                        script {
+                            // Manual approval for production
+                            input message: 'Deploy to Production?', ok: 'Deploy'
+
+                            k8sDeploy(
+                                namespace: 'production',
+                                deployment: env.JOB_BASE_NAME,
+                                image: "${env.REGISTRY_IMAGE}:latest",
+                                replicas: 3
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Canary') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        script {
+                            // Manual approval for canary
+                            input message: 'Deploy Canary?', ok: 'Deploy'
+
+                            k8sDeploy.deployCanary(
+                                namespace: 'production',
+                                deployment: env.JOB_BASE_NAME,
+                                image: "${env.REGISTRY_IMAGE}:latest"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        //=================================================
+        // CLEANUP STAGE
+        //=================================================
+        stage('Cleanup') {
+            when {
+                changeRequest()
+            }
+            steps {
+                script {
+                    // Manual trigger to stop review app
+                    input message: 'Stop Review App?', ok: 'Stop'
+
+                    def mrId = env.CHANGE_ID
+                    k8sDeploy.cleanup("review-${mrId}")
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Clean workspace
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+        unstable {
+            echo 'Pipeline is unstable!'
+        }
+    }
+}

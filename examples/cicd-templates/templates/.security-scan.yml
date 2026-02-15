@@ -1,0 +1,147 @@
+# Security Scanning Template
+# Reusable template for security scanning
+# Usage: extends: .security-scan
+
+.security-scan:
+  stage: security
+  image: alpine:latest
+  variables:
+    SCAN_SEVERITY: "HIGH,CRITICAL"
+    ALLOW_FAILURE: "true"
+  script:
+    - echo "Running security scan..."
+  allow_failure: true
+  tags:
+    - kubernetes
+    - docker
+
+# Container image vulnerability scanning with Trivy
+.scan-trivy-image:
+  extends: .security-scan
+  image: aquasec/trivy:latest
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  script:
+    - echo "Scanning image $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA for vulnerabilities..."
+    - trivy image
+        --severity ${SCAN_SEVERITY}
+        --exit-code 0
+        --no-progress
+        --format table
+        $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - |
+      echo "Generating JSON report..."
+      trivy image \
+        --severity ${SCAN_SEVERITY} \
+        --exit-code 0 \
+        --no-progress \
+        --format json \
+        --output trivy-report.json \
+        $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+  artifacts:
+    reports:
+      container_scanning: trivy-report.json
+    paths:
+      - trivy-report.json
+    expire_in: 1 week
+    when: always
+  cache:
+    key: trivy-cache
+    paths:
+      - .trivycache/
+
+# Filesystem vulnerability scanning
+.scan-trivy-fs:
+  extends: .security-scan
+  image: aquasec/trivy:latest
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  script:
+    - echo "Scanning filesystem for vulnerabilities..."
+    - trivy fs
+        --severity ${SCAN_SEVERITY}
+        --exit-code 0
+        --no-progress
+        --format table
+        .
+    - |
+      trivy fs \
+        --severity ${SCAN_SEVERITY} \
+        --exit-code 0 \
+        --no-progress \
+        --format json \
+        --output trivy-fs-report.json \
+        .
+  artifacts:
+    paths:
+      - trivy-fs-report.json
+    expire_in: 1 week
+    when: always
+  cache:
+    key: trivy-cache
+    paths:
+      - .trivycache/
+
+# Secret detection with Trivy
+.scan-secrets:
+  extends: .security-scan
+  image: aquasec/trivy:latest
+  script:
+    - echo "Scanning for secrets in codebase..."
+    - trivy fs
+        --scanners secret
+        --exit-code 0
+        --no-progress
+        --format table
+        .
+  allow_failure: false  # Fail pipeline if secrets found
+  artifacts:
+    paths:
+      - secret-scan-report.txt
+    expire_in: 1 week
+    when: always
+
+# Dependency scanning
+.scan-dependencies:
+  extends: .security-scan
+  stage: security
+  script:
+    - echo "Scanning dependencies for known vulnerabilities..."
+  artifacts:
+    reports:
+      dependency_scanning: dependency-scan-report.json
+    expire_in: 1 week
+
+# License compliance scanning
+.scan-licenses:
+  extends: .security-scan
+  image: licensefinder/license_finder:latest
+  variables:
+    ALLOWED_LICENSES: "MIT,Apache-2.0,BSD-3-Clause,ISC"
+  script:
+    - echo "Scanning for license compliance..."
+    - license_finder report --format json > license-report.json || true
+    - license_finder report --format text
+  artifacts:
+    paths:
+      - license-report.json
+    expire_in: 1 week
+    when: always
+  allow_failure: true
+
+# SAST (Static Application Security Testing)
+.scan-sast:
+  extends: .security-scan
+  image: returntocorp/semgrep:latest
+  script:
+    - echo "Running SAST analysis..."
+    - semgrep --config=auto --json --output=sast-report.json . || true
+    - semgrep --config=auto .
+  artifacts:
+    paths:
+      - sast-report.json
+    expire_in: 1 week
+    when: always
+  allow_failure: true

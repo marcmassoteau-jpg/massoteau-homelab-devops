@@ -1,0 +1,140 @@
+---
+# ArgoCD Ansible Role - Default Variables
+# Override these in your playbook or inventory
+
+#=============================================================================
+# GENERAL CONFIGURATION
+#=============================================================================
+
+# ArgoCD release configuration
+argocd_namespace: argocd
+argocd_release_name: argocd
+argocd_chart_repo: https://argoproj.github.io/argo-helm
+argocd_chart_name: argo-cd
+argocd_chart_version: "5.55.0"  # Pin to specific version for reproducibility
+
+# Domain configuration
+argocd_domain: argocd.homelab.local
+
+#=============================================================================
+# RESOURCE CONFIGURATION
+#=============================================================================
+
+# Server resources
+argocd_server_replicas: 1
+argocd_server_cpu_request: "100m"
+argocd_server_cpu_limit: "500m"
+argocd_server_memory_request: "128Mi"
+argocd_server_memory_limit: "512Mi"
+
+# Repo Server resources
+argocd_reposerver_replicas: 1
+argocd_reposerver_cpu_request: "100m"
+argocd_reposerver_cpu_limit: "500m"
+argocd_reposerver_memory_request: "128Mi"
+argocd_reposerver_memory_limit: "512Mi"
+
+# Application Controller resources
+argocd_controller_replicas: 1
+argocd_controller_cpu_request: "250m"
+argocd_controller_cpu_limit: "1"
+argocd_controller_memory_request: "256Mi"
+argocd_controller_memory_limit: "1Gi"
+
+# ApplicationSet Controller resources
+argocd_appset_replicas: 1
+argocd_appset_cpu_request: "50m"
+argocd_appset_cpu_limit: "200m"
+argocd_appset_memory_request: "64Mi"
+argocd_appset_memory_limit: "256Mi"
+
+# Redis resources
+argocd_redis_cpu_request: "50m"
+argocd_redis_cpu_limit: "200m"
+argocd_redis_memory_request: "64Mi"
+argocd_redis_memory_limit: "256Mi"
+
+#=============================================================================
+# INGRESS CONFIGURATION
+#=============================================================================
+
+# Ingress controller class
+argocd_ingress_class: traefik
+argocd_ingress_enabled: true
+
+# TLS configuration
+argocd_tls_enabled: false  # TLS terminated at Traefik if needed
+
+#=============================================================================
+# FEATURES CONFIGURATION
+#=============================================================================
+
+# SSO (Dex)
+argocd_dex_enabled: false
+
+# Notifications
+argocd_notifications_enabled: false
+
+# Prometheus metrics
+argocd_metrics_enabled: true
+argocd_servicemonitor_enabled: false  # Enable when Prometheus deployed (Phase 7)
+
+#=============================================================================
+# CONTROLLER SETTINGS
+#=============================================================================
+
+# How often to check for changes (seconds)
+argocd_app_resync_period: "180"
+
+# Self-healing timeout (seconds)
+argocd_self_heal_timeout: "5"
+
+# Status processors
+argocd_status_processors: "20"
+
+# Operation processors
+argocd_operation_processors: "10"
+
+#=============================================================================
+# DEPLOYMENT OPTIONS
+#=============================================================================
+
+# Helm deployment options
+argocd_helm_timeout: "10m"
+argocd_helm_wait: true
+
+# Force redeploy even if already installed
+argocd_force_redeploy: false
+
+# Create namespace
+argocd_create_namespace: true
+
+#=============================================================================
+# POST-DEPLOYMENT CONFIGURATION
+#=============================================================================
+
+# Wait for ArgoCD to be ready
+argocd_wait_for_ready: true
+argocd_ready_timeout: 300  # 5 minutes
+
+# Display access information after deployment
+argocd_show_access_info: true
+
+# Install ArgoCD CLI on the control node
+argocd_install_cli: true
+argocd_cli_version: "latest"
+
+#=============================================================================
+# GITOPS REPOSITORY CONFIGURATION
+#=============================================================================
+
+# Configure GitOps repository after deployment
+argocd_configure_repo: false
+argocd_repo_url: "http://gitlab.homelab.local:30080/homelab/gitops.git"
+argocd_repo_username: "root"
+# argocd_repo_password: ""  # Set via -e or vault
+
+# Create default ArgoCD project
+argocd_create_project: false
+argocd_project_name: "homelab"
+argocd_project_description: "Homelab applications"

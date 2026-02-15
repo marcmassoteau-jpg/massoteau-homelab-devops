@@ -1,0 +1,95 @@
+---
+# Cluster Autoscaler Ansible Role - Default Variables
+# Override these in your playbook or inventory
+
+#=============================================================================
+# GENERAL CONFIGURATION
+#=============================================================================
+
+# Namespace for autoscaler components
+cluster_autoscaler_namespace: autoscaling
+
+# Metrics server version (required for HPA)
+cluster_autoscaler_metrics_server_version: "v0.7.1"
+
+# Deploy example HPA resources
+cluster_autoscaler_deploy_hpa_examples: true
+
+#=============================================================================
+# SCALING CONFIGURATION
+#=============================================================================
+
+# Minimum number of worker nodes in the cluster
+cluster_autoscaler_min_nodes: 4
+
+# Maximum number of worker nodes (including autoscaled nodes)
+cluster_autoscaler_max_nodes: 8
+
+# Seconds to wait before scaling down an underutilized node
+cluster_autoscaler_scale_down_delay: 300
+
+# CPU utilization percentage that triggers scale-up
+cluster_autoscaler_scale_up_threshold: 80
+
+# CPU utilization percentage below which a node is considered underutilized
+cluster_autoscaler_scale_down_threshold: 30
+
+# CronJob schedule for scale-up checks (every 2 minutes)
+cluster_autoscaler_check_interval: "*/2 * * * *"
+
+# CronJob schedule for scale-down checks (every 5 minutes)
+cluster_autoscaler_scale_down_interval: "*/5 * * * *"
+
+#=============================================================================
+# PROXMOX CONFIGURATION
+#=============================================================================
+
+# Proxmox API endpoint
+cluster_autoscaler_proxmox_api_url: "https://192.168.1.222:8006/api2/json"
+
+# Proxmox node name where VMs will be created
+cluster_autoscaler_proxmox_node: "pve"
+
+# VM template ID for cloning new worker nodes
+cluster_autoscaler_vm_template_id: 9000
+
+# Proxmox API credentials (set via -e or vault)
+# cluster_autoscaler_proxmox_api_user: "root@pam"
+# cluster_autoscaler_proxmox_api_token: ""
+
+#=============================================================================
+# NODE CONFIGURATION
+#=============================================================================
+
+# CPU cores for autoscaled worker nodes
+cluster_autoscaler_node_cpus: 4
+
+# Memory in MB for autoscaled worker nodes
+cluster_autoscaler_node_memory: 16384
+
+# Disk size for autoscaled worker nodes
+cluster_autoscaler_node_disk: "100G"
+
+# IP range reserved for autoscaled nodes
+cluster_autoscaler_ip_range_start: "192.168.1.245"
+cluster_autoscaler_ip_range_end: "192.168.1.250"
+
+# Network gateway
+cluster_autoscaler_gateway: "192.168.1.1"
+
+# DNS nameserver
+cluster_autoscaler_nameserver: "192.168.1.1"
+
+#=============================================================================
+# DEPLOYMENT OPTIONS
+#=============================================================================
+
+# Wait for autoscaler to be ready after deployment
+cluster_autoscaler_wait_for_ready: true
+cluster_autoscaler_ready_timeout: 120
+
+# Container image for the autoscaler script runner
+cluster_autoscaler_image: "bitnami/kubectl:1.29"
+
+# Service account name
+cluster_autoscaler_service_account: "cluster-autoscaler"

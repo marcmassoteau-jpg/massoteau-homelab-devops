@@ -1,0 +1,129 @@
+# Docker Build Template
+# Reusable template for building container images with Kaniko
+# Usage: extends: .docker-build
+
+.docker-build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  variables:
+    DOCKERFILE_PATH: "Dockerfile"
+    CONTEXT_PATH: "$CI_PROJECT_DIR"
+    IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    ADDITIONAL_TAGS: "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+  script:
+    - echo "Building Docker image with Kaniko..."
+    - echo "Image: $IMAGE_TAG"
+    - mkdir -p /kaniko/.docker
+    - |
+      echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - |
+      /kaniko/executor \
+        --context $CONTEXT_PATH \
+        --dockerfile $CONTEXT_PATH/$DOCKERFILE_PATH \
+        --destination $IMAGE_TAG \
+        --destination $ADDITIONAL_TAGS \
+        --cache=true \
+        --cache-ttl=24h \
+        --compressed-caching=false \
+        --snapshot-mode=redo \
+        --cleanup
+  tags:
+    - kubernetes
+    - docker
+
+# Docker build with latest tag
+.docker-build-latest:
+  extends: .docker-build
+  variables:
+    ADDITIONAL_TAGS: "$CI_REGISTRY_IMAGE:latest"
+  only:
+    - main
+    - master
+
+# Docker build for feature branches
+.docker-build-feature:
+  extends: .docker-build
+  variables:
+    IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA"
+    ADDITIONAL_TAGS: "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+  except:
+    - main
+    - master
+    - tags
+
+# Docker build for release tags
+.docker-build-release:
+  extends: .docker-build
+  variables:
+    IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+    ADDITIONAL_TAGS: "$CI_REGISTRY_IMAGE:latest"
+  only:
+    - tags
+
+# Multi-stage Docker build
+.docker-build-multistage:
+  extends: .docker-build
+  variables:
+    DOCKERFILE_PATH: "Dockerfile"
+    BUILD_ARGS: ""
+  script:
+    - echo "Building multi-stage Docker image..."
+    - mkdir -p /kaniko/.docker
+    - |
+      echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - |
+      /kaniko/executor \
+        --context $CONTEXT_PATH \
+        --dockerfile $CONTEXT_PATH/$DOCKERFILE_PATH \
+        --destination $IMAGE_TAG \
+        --destination $ADDITIONAL_TAGS \
+        --cache=true \
+        --cache-ttl=24h \
+        --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+        --build-arg VCS_REF=$CI_COMMIT_SHORT_SHA \
+        --build-arg VERSION=$CI_COMMIT_TAG \
+        $BUILD_ARGS \
+        --cleanup
+
+# Docker build with vulnerability scanning
+.docker-build-scan:
+  extends: .docker-build
+  after_script:
+    - echo "Image built, scanning for vulnerabilities..."
+    # Scanning happens in separate security stage
+
+# Docker build and push to multiple registries
+.docker-build-multi-registry:
+  extends: .docker-build
+  variables:
+    ADDITIONAL_REGISTRY: ""
+    ADDITIONAL_REGISTRY_USER: ""
+    ADDITIONAL_REGISTRY_PASSWORD: ""
+  script:
+    - echo "Building and pushing to multiple registries..."
+    - mkdir -p /kaniko/.docker
+    - |
+      cat > /kaniko/.docker/config.json <<EOF
+      {
+        "auths": {
+          "$CI_REGISTRY": {
+            "username": "$CI_REGISTRY_USER",
+            "password": "$CI_REGISTRY_PASSWORD"
+          },
+          "$ADDITIONAL_REGISTRY": {
+            "username": "$ADDITIONAL_REGISTRY_USER",
+            "password": "$ADDITIONAL_REGISTRY_PASSWORD"
+          }
+        }
+      }
+      EOF
+    - |
+      /kaniko/executor \
+        --context $CONTEXT_PATH \
+        --dockerfile $CONTEXT_PATH/$DOCKERFILE_PATH \
+        --destination $IMAGE_TAG \
+        --destination $ADDITIONAL_REGISTRY/$CI_PROJECT_NAME:$CI_COMMIT_SHA \
+        --cache=true \
+        --cleanup

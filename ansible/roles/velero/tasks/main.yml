@@ -1,0 +1,496 @@
+---
+# Velero Backup & Disaster Recovery Role - Main Tasks
+# Deploys Velero on Kubernetes using Helm with MinIO as backup storage
+
+#=============================================================================
+# PRE-FLIGHT CHECKS
+#=============================================================================
+
+- name: Check if kubectl is available
+  command: kubectl version --client --short
+  register: kubectl_version
+  changed_when: false
+  failed_when: kubectl_version.rc != 0
+
+- name: Check if Helm is available
+  command: helm version --short
+  register: helm_version
+  changed_when: false
+  failed_when: helm_version.rc != 0
+
+- name: Verify Kubernetes cluster connectivity
+  command: kubectl cluster-info
+  register: cluster_info
+  changed_when: false
+  failed_when: cluster_info.rc != 0
+
+- name: Display pre-flight check summary
+  debug:
+    msg:
+      - "Pre-flight checks passed:"
+      - "  kubectl: {{ kubectl_version.stdout }}"
+      - "  helm: {{ helm_version.stdout }}"
+      - "  Cluster: Connected"
+
+#=============================================================================
+# NAMESPACE CREATION
+#=============================================================================
+
+- name: Check if velero namespace exists
+  command: "kubectl get namespace {{ velero_namespace }}"
+  register: namespace_check
+  changed_when: false
+  failed_when: false
+
+- name: Create velero namespace
+  when: namespace_check.rc != 0 and velero_create_namespace
+  block:
+    - name: Create namespace manifest
+      copy:
+        dest: /tmp/velero-namespace.yaml
+        content: |
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: {{ velero_namespace }}
+            labels:
+              name: {{ velero_namespace }}
+              app.kubernetes.io/name: velero
+              app.kubernetes.io/component: backup
+              app.kubernetes.io/part-of: devops-platform
+              environment: homelab
+            annotations:
+              description: "Velero backup and disaster recovery"
+              phase: "8"
+              managed-by: ansible
+        mode: '0644'
+
+    - name: Apply namespace
+      command: kubectl apply -f /tmp/velero-namespace.yaml
+      register: namespace_create
+      changed_when: "'created' in namespace_create.stdout"
+
+    - name: Display namespace creation result
+      debug:
+        msg: "Namespace '{{ velero_namespace }}' created successfully"
+
+#=============================================================================
+# HELM REPOSITORY SETUP
+#=============================================================================
+
+- name: Add VMware Tanzu Helm repository
+  command: "helm repo add vmware-tanzu {{ velero_chart_repo }}"
+  register: helm_repo_add
+  changed_when: "'has been added' in helm_repo_add.stdout"
+  failed_when: false
+
+- name: Update Helm repositories
+  command: helm repo update
+  register: helm_repo_update
+  changed_when: false
+
+- name: Verify Velero chart is available
+  command: "helm search repo vmware-tanzu/{{ velero_chart_name }}"
+  register: chart_search
+  changed_when: false
+  failed_when: chart_search.rc != 0
+
+- name: Display available chart
+  debug:
+    msg:
+      - "Helm chart available:"
+      - "  velero: OK"
+
+#=============================================================================
+# CHECK EXISTING DEPLOYMENT
+#=============================================================================
+
+- name: Check if Velero is already deployed
+  command: "helm list -n {{ velero_namespace }} -o json"
+  register: helm_list
+  changed_when: false
+  failed_when: false
+
+- name: Parse Helm list output for Velero
+  set_fact:
+    velero_deployed: "{{ (helm_list.stdout | from_json | selectattr('name', 'equalto', velero_release_name) | list | length > 0) }}"
+
+- name: Display deployment status
+  debug:
+    msg:
+      - "Deployment status:"
+      - "  Velero: {{ 'Already deployed' if velero_deployed else 'Not deployed' }}"
+
+#=============================================================================
+# CREATE BACKUP STORAGE CREDENTIALS
+#=============================================================================
+
+- name: Create MinIO credentials secret
+  block:
+    - name: Create credentials file
+      copy:
+        dest: /tmp/velero-credentials.ini
+        content: |
+          [default]
+          aws_access_key_id = {{ velero_minio_access_key }}
+          aws_secret_access_key = {{ velero_minio_secret_key }}
+        mode: '0600'
+
+    - name: Check if credentials secret exists
+      command: "kubectl get secret velero-credentials -n {{ velero_namespace }}"
+      register: credentials_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create credentials secret
+      when: credentials_check.rc != 0
+      command: >
+        kubectl create secret generic velero-credentials
+        --namespace {{ velero_namespace }}
+        --from-file=cloud=/tmp/velero-credentials.ini
+      register: secret_create
+      changed_when: "'created' in secret_create.stdout"
+
+    - name: Update credentials secret
+      when: credentials_check.rc == 0
+      block:
+        - name: Delete existing credentials secret
+          command: "kubectl delete secret velero-credentials -n {{ velero_namespace }}"
+          changed_when: true
+
+        - name: Recreate credentials secret
+          command: >
+            kubectl create secret generic velero-credentials
+            --namespace {{ velero_namespace }}
+            --from-file=cloud=/tmp/velero-credentials.ini
+          changed_when: true
+
+    - name: Clean up credentials file
+      file:
+        path: /tmp/velero-credentials.ini
+        state: absent
+
+#=============================================================================
+# GENERATE HELM VALUES
+#=============================================================================
+
+- name: Create Velero Helm values file
+  copy:
+    dest: /tmp/velero-values.yaml
+    content: |
+      # Velero Helm Values - Generated by Ansible
+
+      # Velero server configuration
+      resources:
+        requests:
+          cpu: {{ velero_cpu_request }}
+          memory: {{ velero_memory_request }}
+        limits:
+          cpu: {{ velero_cpu_limit }}
+          memory: {{ velero_memory_limit }}
+
+      # Init containers for plugins
+      initContainers:
+        - name: velero-plugin-for-aws
+          image: velero/velero-plugin-for-aws:{{ velero_aws_plugin_version }}
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - mountPath: /target
+              name: plugins
+
+      # Backup storage configuration
+      configuration:
+        backupStorageLocation:
+          - name: default
+            provider: aws
+            bucket: {{ velero_minio_bucket }}
+            credential:
+              name: velero-credentials
+              key: cloud
+            config:
+              region: {{ velero_minio_region }}
+              s3ForcePathStyle: "true"
+              s3Url: {{ velero_minio_url }}
+        volumeSnapshotLocation: []
+        defaultVolumesToFsBackup: {{ velero_default_volumes_to_fs_backup | lower }}
+
+      # Credentials
+      credentials:
+        useSecret: false  # We create the secret manually
+
+      # Deployment replicas
+      deployNodePort: false
+
+      # Schedules (managed separately via templates)
+      schedules: {}
+    mode: '0644'
+  register: velero_values_file
+
+- name: Display values file location
+  debug:
+    msg: "Velero values file created at: /tmp/velero-values.yaml"
+
+#=============================================================================
+# DEPLOY OR UPGRADE VELERO
+#=============================================================================
+
+- name: Deploy Velero (initial installation)
+  when: not velero_deployed or velero_force_redeploy
+  block:
+    - name: Install Velero via Helm
+      command: >
+        helm install {{ velero_release_name }}
+        vmware-tanzu/{{ velero_chart_name }}
+        --namespace {{ velero_namespace }}
+        --create-namespace
+        --version {{ velero_chart_version }}
+        --values /tmp/velero-values.yaml
+        --timeout {{ velero_helm_timeout }}
+        {{ '--wait' if velero_helm_wait else '' }}
+      register: helm_install_velero
+      async: 600
+      poll: 15
+
+    - name: Display installation progress
+      debug:
+        msg: "Velero installation completed."
+
+- name: Upgrade Velero (if already deployed and not force redeploying)
+  when: velero_deployed and not velero_force_redeploy
+  block:
+    - name: Upgrade Velero via Helm
+      command: >
+        helm upgrade {{ velero_release_name }}
+        vmware-tanzu/{{ velero_chart_name }}
+        --namespace {{ velero_namespace }}
+        --version {{ velero_chart_version }}
+        --values /tmp/velero-values.yaml
+        --timeout {{ velero_helm_timeout }}
+        {{ '--wait' if velero_helm_wait else '' }}
+      register: helm_upgrade_velero
+      async: 600
+      poll: 15
+
+    - name: Display upgrade result
+      debug:
+        msg: "Velero upgraded successfully"
+
+#=============================================================================
+# WAIT FOR DEPLOYMENT
+#=============================================================================
+
+- name: Wait for Velero pods to be Running
+  when: velero_wait_for_ready
+  block:
+    - name: Wait for Velero server
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=velero
+        -n {{ velero_namespace }}
+        --timeout={{ velero_ready_timeout }}s
+      register: velero_ready
+      retries: 3
+      delay: 15
+      until: velero_ready.rc == 0
+      failed_when: false
+
+    - name: Check Velero pod status
+      command: "kubectl get pods -n {{ velero_namespace }}"
+      register: velero_pods
+      changed_when: false
+
+    - name: Display Velero pod status
+      debug:
+        var: velero_pods.stdout_lines
+
+#=============================================================================
+# INSTALL VELERO CLI
+#=============================================================================
+
+- name: Install Velero CLI
+  when: velero_install_cli
+  block:
+    - name: Check if Velero CLI is already installed
+      command: velero version --client-only
+      register: velero_cli_check
+      changed_when: false
+      failed_when: false
+
+    - name: Determine system architecture
+      command: uname -m
+      register: system_arch
+      changed_when: false
+
+    - name: Set architecture variable
+      set_fact:
+        velero_arch: "{{ 'arm64' if system_arch.stdout == 'aarch64' else 'amd64' }}"
+
+    - name: Determine operating system
+      command: uname -s
+      register: system_os
+      changed_when: false
+
+    - name: Set OS variable
+      set_fact:
+        velero_os: "{{ system_os.stdout | lower }}"
+
+    - name: Download Velero CLI
+      when: velero_cli_check.rc != 0 or velero_cli_version not in (velero_cli_check.stdout | default(''))
+      block:
+        - name: Download Velero CLI tarball
+          get_url:
+            url: "https://github.com/vmware-tanzu/velero/releases/download/{{ velero_cli_version }}/velero-{{ velero_cli_version }}-{{ velero_os }}-{{ velero_arch }}.tar.gz"
+            dest: /tmp/velero-cli.tar.gz
+            mode: '0644'
+
+        - name: Extract Velero CLI
+          unarchive:
+            src: /tmp/velero-cli.tar.gz
+            dest: /tmp/
+            remote_src: yes
+
+        - name: Install Velero CLI binary
+          copy:
+            src: "/tmp/velero-{{ velero_cli_version }}-{{ velero_os }}-{{ velero_arch }}/velero"
+            dest: /usr/local/bin/velero
+            mode: '0755'
+            remote_src: yes
+
+        - name: Clean up Velero CLI download
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/velero-cli.tar.gz
+            - "/tmp/velero-{{ velero_cli_version }}-{{ velero_os }}-{{ velero_arch }}"
+
+        - name: Verify Velero CLI installation
+          command: velero version --client-only
+          register: velero_cli_verify
+          changed_when: false
+
+        - name: Display Velero CLI version
+          debug:
+            msg: "Velero CLI installed: {{ velero_cli_verify.stdout }}"
+
+#=============================================================================
+# CREATE BACKUP SCHEDULES
+#=============================================================================
+
+- name: Create backup schedules
+  when: velero_create_schedules
+  block:
+    - name: Create backup schedule manifests
+      template:
+        src: backup-schedule.yaml.j2
+        dest: "/tmp/velero-schedule-{{ item.name }}.yaml"
+        mode: '0644'
+      loop: "{{ velero_backup_schedules }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Apply backup schedules
+      command: "kubectl apply -f /tmp/velero-schedule-{{ item.name }}.yaml"
+      loop: "{{ velero_backup_schedules }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: schedule_apply
+      changed_when: "'created' in schedule_apply.stdout or 'configured' in schedule_apply.stdout"
+
+    - name: Display created schedules
+      debug:
+        msg:
+          - "Backup schedules created:"
+          - "{% for schedule in velero_backup_schedules %}  - {{ schedule.name }}: {{ schedule.schedule }}"
+          - "{% endfor %}"
+
+#=============================================================================
+# VERIFY BACKUP LOCATION
+#=============================================================================
+
+- name: Verify BackupStorageLocation status
+  block:
+    - name: Wait for BackupStorageLocation to be available
+      command: >
+        kubectl get backupstoragelocation default
+        -n {{ velero_namespace }}
+        -o jsonpath='{.status.phase}'
+      register: bsl_status
+      retries: 10
+      delay: 15
+      until: bsl_status.stdout == 'Available'
+      changed_when: false
+      failed_when: false
+
+    - name: Display BackupStorageLocation status
+      debug:
+        msg: "BackupStorageLocation 'default': {{ bsl_status.stdout | default('Pending') }}"
+
+    - name: Get all BackupStorageLocations
+      command: "kubectl get backupstoragelocation -n {{ velero_namespace }}"
+      register: bsl_list
+      changed_when: false
+
+    - name: Display BackupStorageLocation details
+      debug:
+        var: bsl_list.stdout_lines
+
+#=============================================================================
+# DISPLAY SUMMARY
+#=============================================================================
+
+- name: Get deployment summary
+  command: "helm list -n {{ velero_namespace }}"
+  register: helm_list_final
+  changed_when: false
+
+- name: Get backup schedules
+  command: "kubectl get schedules -n {{ velero_namespace }}"
+  register: schedules_list
+  changed_when: false
+  failed_when: false
+
+- name: Display deployment summary
+  debug:
+    msg:
+      - "================================================================"
+      - "  Velero Backup & Disaster Recovery Deployed Successfully!"
+      - "================================================================"
+      - ""
+      - "Deployed Components:"
+      - "  Velero Server: {{ velero_chart_version }}"
+      - "  AWS Plugin: {{ velero_aws_plugin_version }}"
+      - "  CLI Version: {{ velero_cli_version }}"
+      - ""
+      - "Backup Storage:"
+      - "  Provider: MinIO (S3-compatible)"
+      - "  Endpoint: {{ velero_minio_url }}"
+      - "  Bucket: {{ velero_minio_bucket }}"
+      - "  Status: {{ bsl_status.stdout | default('Pending') }}"
+      - ""
+      - "Backup Schedules:"
+      - "{{ schedules_list.stdout_lines | default(['  No schedules configured']) }}"
+      - ""
+      - "{{ helm_list_final.stdout_lines }}"
+
+- name: Display next steps
+  debug:
+    msg:
+      - ""
+      - "Next Steps:"
+      - "  1. Verify backup storage: velero backup-location get"
+      - "  2. Create a test backup: velero backup create test-backup --include-namespaces default"
+      - "  3. Check backup status: velero backup get"
+      - "  4. View scheduled backups: velero schedule get"
+      - "  5. Restore from backup: velero restore create --from-backup <backup-name>"
+      - ""
+      - "Useful Commands:"
+      - "  velero backup get                    # List all backups"
+      - "  velero backup describe <name>        # Backup details"
+      - "  velero backup logs <name>            # Backup logs"
+      - "  velero schedule get                  # List schedules"
+      - "  velero restore get                   # List restores"
+      - ""
+      - "For more information, see Article 20 in docs/articles/"
+      - ""

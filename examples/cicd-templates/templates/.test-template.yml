@@ -1,0 +1,96 @@
+# Test Template
+# Reusable template for running tests
+# Usage: extends: .test-template
+
+.test-template:
+  stage: test
+  image: alpine:latest
+  variables:
+    TEST_COMMAND: "echo 'No test command specified'"
+    COVERAGE_THRESHOLD: "80"
+  script:
+    - echo "Starting test execution..."
+    - echo "Test command: $TEST_COMMAND"
+    - eval "$TEST_COMMAND"
+    - echo "Tests complete!"
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      junit: test-results.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage/
+      - test-results/
+    expire_in: 1 week
+    when: always
+  tags:
+    - kubernetes
+    - docker
+
+# Node.js test template
+.test-node:
+  extends: .test-template
+  image: node:18-alpine
+  variables:
+    TEST_COMMAND: "npm ci && npm test"
+  before_script:
+    - node --version
+    - npm --version
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-node
+    paths:
+      - node_modules/
+      - .npm/
+    policy: pull
+
+# Python test template
+.test-python:
+  extends: .test-template
+  image: python:3.11-alpine
+  variables:
+    TEST_COMMAND: "pip install --cache-dir .pip-cache -r requirements.txt -r requirements-dev.txt && pytest --cov --cov-report=xml --cov-report=term --junitxml=test-results.xml"
+  before_script:
+    - python --version
+    - pip --version
+    - pip install pytest pytest-cov
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-python
+    paths:
+      - .pip-cache/
+      - venv/
+    policy: pull
+
+# Go test template
+.test-go:
+  extends: .test-template
+  image: golang:1.21-alpine
+  variables:
+    TEST_COMMAND: "go test -v -coverprofile=coverage.out -covermode=atomic ./... && go tool cover -func=coverage.out"
+  before_script:
+    - go version
+    - apk add --no-cache git
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-go
+    paths:
+      - .go-cache/
+    policy: pull
+
+# Integration test template
+.test-integration:
+  extends: .test-template
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  variables:
+    POSTGRES_DB: testdb
+    POSTGRES_USER: testuser
+    POSTGRES_PASSWORD: testpass
+    DATABASE_URL: "postgresql://testuser:testpass@postgres:5432/testdb"
+    REDIS_URL: "redis://redis:6379"
+  before_script:
+    - echo "Waiting for services to be ready..."
+    - sleep 5

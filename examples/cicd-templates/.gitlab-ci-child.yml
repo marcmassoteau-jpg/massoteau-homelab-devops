@@ -1,0 +1,72 @@
+# Child Pipeline Example
+# Triggered by parent pipeline when microservices/* changes
+# Demonstrates workflow orchestration for monorepos
+
+stages:
+  - validate
+  - build-services
+  - test-services
+  - deploy-services
+
+# Include templates from parent
+include:
+  - local: 'templates/.build-template.yml'
+  - local: 'templates/.test-template.yml'
+  - local: 'templates/.docker-build.yml'
+
+# Validate microservices
+validate-services:
+  stage: validate
+  image: alpine:latest
+  script:
+    - echo "Validating microservices structure..."
+    - ls -la microservices/
+    - echo "Validation complete"
+
+# Build service A
+build-service-a:
+  extends: .build-node
+  stage: build-services
+  variables:
+    BUILD_COMMAND: "cd microservices/service-a && npm ci && npm run build"
+  needs: ["validate-services"]
+
+# Build service B
+build-service-b:
+  extends: .build-python
+  stage: build-services
+  variables:
+    BUILD_COMMAND: "cd microservices/service-b && pip install -r requirements.txt && python setup.py build"
+  needs: ["validate-services"]
+
+# Test service A
+test-service-a:
+  extends: .test-node
+  stage: test-services
+  variables:
+    TEST_COMMAND: "cd microservices/service-a && npm ci && npm test"
+  needs: ["build-service-a"]
+
+# Test service B
+test-service-b:
+  extends: .test-python
+  stage: test-services
+  variables:
+    TEST_COMMAND: "cd microservices/service-b && pip install -r requirements.txt && pytest"
+  needs: ["build-service-b"]
+
+# Deploy services
+deploy-services:
+  stage: deploy-services
+  image: bitnami/kubectl:latest
+  script:
+    - echo "Deploying microservices to Kubernetes..."
+    - kubectl apply -f microservices/k8s/ -n microservices
+  needs:
+    - test-service-a
+    - test-service-b
+  environment:
+    name: microservices
+    kubernetes:
+      namespace: microservices
+  when: manual

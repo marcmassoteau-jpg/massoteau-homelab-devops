@@ -1,0 +1,211 @@
+---
+# Jenkins Ansible Role - Default Variables
+# Override these in your playbook or inventory
+
+#=============================================================================
+# GENERAL CONFIGURATION
+#=============================================================================
+
+# Jenkins release configuration
+jenkins_namespace: jenkins
+jenkins_release_name: jenkins
+jenkins_chart_repo: https://charts.jenkins.io
+jenkins_chart_name: jenkins
+jenkins_chart_version: "5.7.18"  # Pin to specific version for reproducibility
+
+# Domain configuration
+jenkins_domain: jenkins.homelab.local
+
+#=============================================================================
+# RESOURCE CONFIGURATION
+#=============================================================================
+
+# Controller (master) resources
+jenkins_controller_cpu_request: "500m"
+jenkins_controller_cpu_limit: "2"
+jenkins_controller_memory_request: "512Mi"
+jenkins_controller_memory_limit: "2Gi"
+
+# Agent resources (default for dynamic agents)
+jenkins_agent_cpu_request: "200m"
+jenkins_agent_cpu_limit: "1"
+jenkins_agent_memory_request: "256Mi"
+jenkins_agent_memory_limit: "1Gi"
+
+#=============================================================================
+# STORAGE CONFIGURATION
+#=============================================================================
+
+# Persistent volume for Jenkins home
+jenkins_persistence_enabled: true
+jenkins_persistence_size: "20Gi"
+jenkins_persistence_storageclass: "local-path"  # Adjust for your cluster
+jenkins_persistence_access_mode: "ReadWriteOnce"
+
+#=============================================================================
+# CONTROLLER CONFIGURATION
+#=============================================================================
+
+# Controller image
+jenkins_controller_image: "jenkins/jenkins"
+jenkins_controller_tag: "2.479-jdk17"
+
+# Number of executors on controller
+jenkins_controller_executors: 0  # Use agents for builds, not controller
+
+# Admin credentials
+jenkins_admin_user: admin
+# jenkins_admin_password: ""  # Set via -e or vault (auto-generated if not set)
+
+# Java options
+jenkins_java_opts: "-Xmx1536m -Djenkins.install.runSetupWizard=false"
+
+#=============================================================================
+# PLUGINS CONFIGURATION
+#=============================================================================
+
+# Install plugins on deployment
+jenkins_install_plugins: true
+
+# Essential plugins (installed automatically)
+jenkins_plugins:
+  - kubernetes:4253.v7700d91739e5
+  - workflow-aggregator:600.vb_57cdd26fdd7
+  - git:5.6.0
+  - configuration-as-code:1850.va_a_8c31d3158b_
+  - credentials-binding:681.vf91669a_32e45
+  - blueocean:1.27.14
+  - job-dsl:1.87
+  - docker-workflow:580.vc0c340686b_54
+  - pipeline-stage-view:2.34
+  - prometheus:777.v831a_9ee5b_7c8
+
+#=============================================================================
+# KUBERNETES PLUGIN CONFIGURATION
+#=============================================================================
+
+# Kubernetes plugin settings
+jenkins_kubernetes_plugin_enabled: true
+jenkins_kubernetes_namespace: jenkins
+jenkins_kubernetes_jenkins_url: "http://jenkins.jenkins.svc.cluster.local:8080"
+
+# Default pod templates
+jenkins_pod_templates_enabled: true
+
+#=============================================================================
+# INGRESS CONFIGURATION
+#=============================================================================
+
+# Ingress controller class
+jenkins_ingress_class: traefik
+jenkins_ingress_enabled: true
+
+# TLS configuration
+jenkins_tls_enabled: false  # TLS terminated at Traefik if needed
+
+#=============================================================================
+# FEATURES CONFIGURATION
+#=============================================================================
+
+# CSRF Protection
+jenkins_csrf_enabled: true
+
+# Agent → Controller security
+jenkins_agent_protocols:
+  - "JNLP4-connect"
+  - "Ping"
+
+# Prometheus metrics
+jenkins_metrics_enabled: true
+jenkins_servicemonitor_enabled: false  # Enable when Prometheus deployed (Phase 7)
+
+# Script approval
+jenkins_script_approval_enabled: true
+
+#=============================================================================
+# RBAC CONFIGURATION
+#=============================================================================
+
+# Service account
+jenkins_serviceaccount_create: true
+jenkins_serviceaccount_name: jenkins
+
+# RBAC for Kubernetes plugin
+jenkins_rbac_create: true
+
+#=============================================================================
+# BACKUP CONFIGURATION
+#=============================================================================
+
+# Backup settings
+jenkins_backup_enabled: false
+jenkins_backup_schedule: "0 2 * * *"  # Daily at 2 AM
+jenkins_backup_retention: 7  # Keep 7 days of backups
+
+#=============================================================================
+# DEPLOYMENT OPTIONS
+#=============================================================================
+
+# Helm deployment options
+jenkins_helm_timeout: "10m"
+jenkins_helm_wait: true
+
+# Force redeploy even if already installed
+jenkins_force_redeploy: false
+
+# Create namespace
+jenkins_create_namespace: true
+
+#=============================================================================
+# POST-DEPLOYMENT CONFIGURATION
+#=============================================================================
+
+# Wait for Jenkins to be ready
+jenkins_wait_for_ready: true
+jenkins_ready_timeout: 300  # 5 minutes
+
+# Display access information after deployment
+jenkins_show_access_info: true
+
+# Install Jenkins CLI on the control node
+jenkins_install_cli: true
+
+#=============================================================================
+# CONFIGURATION AS CODE (JCasC)
+#=============================================================================
+
+# Enable JCasC
+jenkins_jcasc_enabled: true
+
+# Security realm
+jenkins_security_realm: "local"  # Options: local, ldap, saml
+
+# Authorization strategy
+jenkins_authorization_strategy: "loggedInUsersCanDoAnything"  # Options: loggedInUsersCanDoAnything, projectMatrix
+
+# System message
+jenkins_system_message: "Jenkins CI/CD - Homelab DevOps Platform"
+
+# Number of builds to keep
+jenkins_num_builds_to_keep: 30
+jenkins_artifact_days_to_keep: 7
+
+#=============================================================================
+# GITLAB INTEGRATION (OPTIONAL)
+#=============================================================================
+
+# Configure GitLab integration
+jenkins_configure_gitlab: false
+jenkins_gitlab_url: "http://gitlab.homelab.local:30080"
+jenkins_gitlab_api_token: ""  # Set via -e or vault
+jenkins_gitlab_connection_name: "homelab-gitlab"
+
+#=============================================================================
+# SHARED LIBRARY CONFIGURATION (OPTIONAL)
+#=============================================================================
+
+# Configure shared library
+jenkins_configure_shared_library: false
+jenkins_shared_library_name: "jenkins-shared-library"
+jenkins_shared_library_repo: "http://gitlab.homelab.local:30080/homelab/jenkins-shared-library.git"
+jenkins_shared_library_default_version: "main"

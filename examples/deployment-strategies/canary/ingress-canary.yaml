@@ -1,0 +1,82 @@
+# Traefik IngressRoute with Weighted Services
+# Distributes traffic between stable and canary based on weights
+# Weights can be adjusted to gradually shift traffic to canary
+
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: myapp-canary
+  namespace: production
+  labels:
+    app: myapp
+    deployment-strategy: canary
+spec:
+  entryPoints:
+    - web
+    - websecure
+  routes:
+  - match: Host(`myapp.homelab.local`)
+    kind: Rule
+    services:
+    # Stable service (100% traffic initially)
+    - name: myapp-stable
+      port: 80
+      weight: 100
+      strategy: RoundRobin
+
+    # Canary service (0% traffic initially)
+    - name: myapp-canary
+      port: 80
+      weight: 0
+      strategy: RoundRobin
+
+  # Optional: TLS configuration
+  # tls:
+  #   secretName: myapp-tls
+
+---
+# Alternative: Standard Kubernetes Ingress with NGINX annotations
+# Use this if you're using NGINX Ingress Controller instead of Traefik
+
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: myapp-canary-nginx
+#   namespace: production
+#   annotations:
+#     kubernetes.io/ingress.class: "nginx"
+#     nginx.ingress.kubernetes.io/canary: "true"
+#     nginx.ingress.kubernetes.io/canary-weight: "10"  # 10% to canary
+# spec:
+#   rules:
+#   - host: myapp.homelab.local
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: myapp-canary
+#             port:
+#               number: 80
+#
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: myapp-stable-nginx
+#   namespace: production
+#   annotations:
+#     kubernetes.io/ingress.class: "nginx"
+# spec:
+#   rules:
+#   - host: myapp.homelab.local
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: myapp-stable
+#             port:
+#               number: 80

@@ -1,0 +1,63 @@
+# Blue Environment Deployment
+# One of two identical environments for blue-green deployment strategy
+# Traffic routing controlled by 'role' label (active/inactive)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-blue
+  namespace: production
+  labels:
+    app: myapp
+    version: blue
+    deployment-strategy: blue-green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: myapp
+        version: blue
+        role: inactive  # Change to 'active' to receive production traffic
+    spec:
+      containers:
+      - name: myapp
+        image: registry.gitlab.homelab.local/myproject/myapp:blue
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: VERSION
+          value: "blue"
+        - name: ENVIRONMENT
+          value: "production"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

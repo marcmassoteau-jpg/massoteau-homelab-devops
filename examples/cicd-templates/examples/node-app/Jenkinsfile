@@ -1,0 +1,235 @@
+// Node.js Application Pipeline
+// Demonstrates Jenkins pipeline for Node.js/Express application
+
+@Library('cicd-shared-library') _
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: node
+    image: node:18-alpine
+    command: ['cat']
+    tty: true
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:debug
+    command: ['sleep']
+    args: ['infinity']
+    volumeMounts:
+    - name: kaniko-secret
+      mountPath: /kaniko/.docker
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ['cat']
+    tty: true
+  - name: trivy
+    image: aquasec/trivy:latest
+    command: ['cat']
+    tty: true
+  volumes:
+  - name: kaniko-secret
+    secret:
+      secretName: registry-credentials
+      items:
+      - key: .dockerconfigjson
+        path: config.json
+"""
+        }
+    }
+
+    environment {
+        NODE_VERSION = '18'
+        APP_NAME = 'node-demo-app'
+        CI_REGISTRY = 'registry.gitlab.homelab.local'
+        REGISTRY_IMAGE = "${env.CI_REGISTRY}/${env.APP_NAME}"
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 45, unit: 'MINUTES')
+        timestamps()
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                script {
+                    buildApp(
+                        type: 'node',
+                        buildCommand: 'npm ci && npm run build',
+                        outputDir: 'dist'
+                    )
+                }
+            }
+        }
+
+        stage('Test') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        script {
+                            testApp(
+                                type: 'node',
+                                testCommand: 'npm ci && npm run test:unit -- --coverage',
+                                coverage: true
+                            )
+                        }
+                    }
+                }
+
+                stage('Lint') {
+                    steps {
+                        container('node') {
+                            script {
+                                sh 'npm ci'
+                                sh 'npm run lint || true'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Security') {
+            parallel {
+                stage('Dependencies') {
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'dependencies',
+                                language: 'node',
+                                allowFailure: true
+                            )
+                        }
+                    }
+                }
+
+                stage('Secrets') {
+                    steps {
+                        script {
+                            securityScan(
+                                type: 'secrets',
+                                allowFailure: false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Package') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                script {
+                    unstash 'build-artifacts'
+
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'registry-credentials',
+                            usernameVariable: 'REGISTRY_USER',
+                            passwordVariable: 'REGISTRY_PASSWORD'
+                        )
+                    ]) {
+                        dockerBuild(
+                            dockerfile: 'Dockerfile',
+                            imageName: env.REGISTRY_IMAGE,
+                            imageTag: env.GIT_COMMIT
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Scan Container') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                script {
+                    securityScan(
+                        type: 'trivy-image',
+                        image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                        severity: 'HIGH,CRITICAL',
+                        allowFailure: true
+                    )
+                }
+            }
+        }
+
+        stage('Deploy') {
+            stages {
+                stage('Deploy Dev') {
+                    when {
+                        branch 'develop'
+                    }
+                    steps {
+                        script {
+                            k8sDeploy(
+                                namespace: 'development',
+                                deployment: env.APP_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                                replicas: 1
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Review') {
+                    when {
+                        changeRequest()
+                    }
+                    steps {
+                        script {
+                            k8sDeploy.deployReview(
+                                deployment: env.APP_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}"
+                            )
+                        }
+                    }
+                }
+
+                stage('Deploy Production') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        script {
+                            input message: 'Deploy to Production?', ok: 'Deploy'
+
+                            k8sDeploy(
+                                namespace: 'production',
+                                deployment: env.APP_NAME,
+                                image: "${env.REGISTRY_IMAGE}:${env.GIT_COMMIT}",
+                                replicas: 3
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo 'Node.js pipeline completed successfully!'
+        }
+        failure {
+            echo 'Node.js pipeline failed!'
+        }
+    }
+}

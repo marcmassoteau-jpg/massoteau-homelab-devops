@@ -1,0 +1,28 @@
+---
+# Traefik IngressRoute with weighted services for canary traffic splitting
+# Adjust weights to control traffic distribution:
+#   100/0  = 100% stable (initial state)
+#   90/10  = 10% canary
+#   75/25  = 25% canary
+#   50/50  = 50% canary
+#   0/100  = 100% canary (full promotion)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: demo-app-canary
+  labels:
+    app: demo-app
+    deployment-strategy: canary
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`demo-app.homelab.local`)
+      kind: Rule
+      services:
+        - name: demo-app-stable
+          port: 80
+          weight: 100
+        - name: demo-app-canary
+          port: 80
+          weight: 0

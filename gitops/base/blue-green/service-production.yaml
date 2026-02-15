@@ -1,0 +1,20 @@
+---
+# Production service - routes to the active deployment
+# Traffic switching: change the selector 'role' label in the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app-production
+  labels:
+    app: demo-app
+    app.kubernetes.io/name: demo-app
+    app.kubernetes.io/component: production-service
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    app: demo-app
+    role: active

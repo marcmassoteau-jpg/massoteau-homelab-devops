@@ -1,0 +1,38 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-app-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: demo-app
+    environment: production
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: http://gitlab.homelab.local:30080/homelab/gitops.git
+    targetRevision: main
+    path: environments/prod/demo-app
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-prod
+
+  syncPolicy:
+    # Production: auto-sync enabled but NO auto-prune for safety
+    automated:
+      prune: false      # Manual prune required in production
+      selfHeal: true     # Still revert manual changes
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

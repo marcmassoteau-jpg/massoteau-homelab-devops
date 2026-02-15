@@ -1,0 +1,135 @@
+# Python Application Pipeline
+# Demonstrates template usage for a Python/Flask application
+
+include:
+  - project: 'homelab/cicd-templates'
+    ref: main
+    file:
+      - 'templates/.build-template.yml'
+      - 'templates/.test-template.yml'
+      - 'templates/.security-scan.yml'
+      - 'templates/.docker-build.yml'
+      - 'templates/.k8s-deploy.yml'
+
+stages:
+  - build
+  - test
+  - security
+  - package
+  - deploy
+
+variables:
+  PYTHON_VERSION: "3.11"
+  APP_NAME: "python-demo-app"
+
+# Build the application
+build:
+  extends: .build-python
+  variables:
+    BUILD_COMMAND: "pip install --cache-dir .pip-cache -r requirements.txt && python -m build"
+
+# Run unit tests with coverage
+test-unit:
+  extends: .test-python
+  variables:
+    TEST_COMMAND: "pip install --cache-dir .pip-cache -r requirements.txt -r requirements-dev.txt && pytest tests/unit --cov --cov-report=xml --cov-report=term --junitxml=test-results.xml"
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  needs: ["build"]
+
+# Run integration tests
+test-integration:
+  extends: .test-integration
+  image: python:3.11-alpine
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+  variables:
+    TEST_COMMAND: "pip install --cache-dir .pip-cache -r requirements.txt -r requirements-dev.txt && pytest tests/integration -v"
+    DATABASE_URL: "postgresql://testuser:testpass@postgres:5432/testdb"
+  needs: ["build"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+# Code quality checks
+lint:
+  stage: test
+  image: python:3.11-alpine
+  script:
+    - pip install flake8 black mypy
+    - echo "Running flake8..."
+    - flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+    - echo "Running black..."
+    - black --check . || true
+    - echo "Running mypy..."
+    - mypy . || true
+  needs: []
+  allow_failure: true
+
+# Security: Dependency scanning
+scan-dependencies:
+  extends: .scan-dependencies
+  image: python:3.11-alpine
+  script:
+    - pip install safety
+    - pip install --cache-dir .pip-cache -r requirements.txt
+    - safety check --json > safety-report.json || true
+    - safety check
+  artifacts:
+    reports:
+      dependency_scanning: safety-report.json
+  needs: []
+  allow_failure: true
+
+# Security: Secret scanning
+scan-secrets:
+  extends: .scan-secrets
+  needs: []
+
+# Build Docker image
+docker-build:
+  extends: .docker-build
+  variables:
+    DOCKERFILE_PATH: "Dockerfile"
+  needs:
+    - build
+    - test-unit
+
+# Scan container image
+scan-container:
+  extends: .scan-trivy-image
+  needs: ["docker-build"]
+
+# Deploy to development
+deploy-dev:
+  extends: .deploy-dev
+  needs: ["docker-build"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+# Deploy review app for MRs
+deploy-review:
+  extends: .deploy-review
+  needs: ["docker-build"]
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+
+# Deploy to staging
+deploy-staging:
+  extends: .deploy-staging
+  needs:
+    - docker-build
+    - test-integration
+    - scan-container
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy to production (manual)
+deploy-prod:
+  extends: .deploy-production
+  needs:
+    - docker-build
+    - scan-container
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG

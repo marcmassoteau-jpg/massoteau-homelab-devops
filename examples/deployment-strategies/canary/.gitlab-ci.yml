@@ -1,0 +1,337 @@
+# Canary Deployment Pipeline
+# Progressive traffic rollout: 10% → 25% → 50% → 100%
+# Automated monitoring and rollback on error threshold breach
+#
+# Flow:
+# 1. Build and push new image
+# 2. Deploy to canary (0% traffic initially)
+# 3. Promote to 10% traffic
+# 4. Monitor metrics (auto-rollback if errors)
+# 5. Manual promotion gates at 25%, 50%
+# 6. Full promotion: update stable deployment
+# 7. Set traffic back to 100% stable, 0% canary
+
+stages:
+  - build
+  - deploy-canary
+  - promote-10
+  - promote-25
+  - promote-50
+  - promote-100
+  - cleanup
+
+variables:
+  NAMESPACE: "production"
+  APP_NAME: "myapp"
+  STABLE_SERVICE: "myapp-stable"
+  CANARY_SERVICE: "myapp-canary"
+  INGRESS_NAME: "myapp-canary"
+  # Monitoring thresholds
+  ERROR_RATE_THRESHOLD: "0.01"  # 1% error rate
+  LATENCY_P95_THRESHOLD: "1000"  # 1 second
+  MONITORING_DURATION: "300"  # 5 minutes
+
+# Build Docker image
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - |
+      echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - |
+      /kaniko/executor \
+        --context $CI_PROJECT_DIR \
+        --dockerfile $CI_PROJECT_DIR/Dockerfile \
+        --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA \
+        --destination $CI_REGISTRY_IMAGE:canary \
+        --cache=true \
+        --cleanup
+  only:
+    - main
+    - master
+
+# Deploy to canary deployment (0% traffic)
+deploy-canary:
+  stage: deploy-canary
+  image: bitnami/kubectl:latest
+  needs: ["build-image"]
+  script:
+    - |
+      echo "Deploying new version to canary deployment..."
+
+      # Update canary deployment image
+      kubectl set image deployment/myapp-canary \
+        myapp=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA \
+        -n ${NAMESPACE}
+
+      # Wait for rollout to complete
+      kubectl rollout status deployment/myapp-canary -n ${NAMESPACE} --timeout=5m
+
+      # Set initial traffic to 100% stable, 0% canary
+      kubectl patch ingressroute ${INGRESS_NAME} -n ${NAMESPACE} --type=json -p='[
+        {"op":"replace","path":"/spec/routes/0/services/0/weight","value":100},
+        {"op":"replace","path":"/spec/routes/0/services/1/weight","value":0}
+      ]'
+
+      echo "✅ Canary deployed (0% traffic)"
+      kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME},version=canary
+  environment:
+    name: production-canary
+  only:
+    - main
+    - master
+
+# Smoke test canary deployment
+smoke-test-canary:
+  stage: deploy-canary
+  image: curlimages/curl:latest
+  needs: ["deploy-canary"]
+  script:
+    - |
+      echo "Running smoke tests on canary deployment..."
+      CANARY_SVC="${CANARY_SERVICE}.${NAMESPACE}.svc.cluster.local"
+
+      # Health check
+      curl -f http://${CANARY_SVC}/health || exit 1
+
+      # Ready check
+      curl -f http://${CANARY_SVC}/ready || exit 1
+
+      # Functional test
+      curl -s http://${CANARY_SVC}/ | grep -q "." || exit 1
+
+      echo "✅ Smoke tests passed"
+  retry:
+    max: 3
+    when: script_failure
+  only:
+    - main
+    - master
+
+# Promote to 10% traffic
+promote-to-10:
+  stage: promote-10
+  image: bitnami/kubectl:latest
+  needs:
+    - deploy-canary
+    - smoke-test-canary
+  script:
+    - |
+      echo "📊 Promoting canary to 10% traffic..."
+
+      # Update traffic weights: 90% stable, 10% canary
+      kubectl patch ingressroute ${INGRESS_NAME} -n ${NAMESPACE} --type=json -p='[
+        {"op":"replace","path":"/spec/routes/0/services/0/weight","value":90},
+        {"op":"replace","path":"/spec/routes/0/services/1/weight","value":10}
+      ]'
+
+      echo "✅ Canary at 10% traffic"
+      echo "Monitoring will run for ${MONITORING_DURATION} seconds..."
+  environment:
+    name: production
+    url: https://myapp.homelab.local
+  only:
+    - main
+    - master
+
+# Monitor canary at 10%
+monitor-canary-10:
+  stage: promote-10
+  image: alpine:latest
+  needs: ["promote-to-10"]
+  before_script:
+    - apk add --no-cache curl jq bc
+  script:
+    - |
+      echo "🔍 Monitoring canary at 10% for ${MONITORING_DURATION} seconds..."
+
+      # Source monitoring script
+      chmod +x ./scripts/monitor-canary.sh
+      ./scripts/monitor-canary.sh ${MONITORING_DURATION} ${ERROR_RATE_THRESHOLD} ${LATENCY_P95_THRESHOLD}
+
+      if [ $? -ne 0 ]; then
+        echo "❌ Monitoring failed, triggering rollback..."
+        ./scripts/rollback-canary.sh
+        exit 1
+      fi
+
+      echo "✅ Monitoring complete - metrics healthy at 10%"
+  allow_failure: false
+  only:
+    - main
+    - master
+
+# Promote to 25% traffic (manual approval)
+promote-to-25:
+  stage: promote-25
+  image: bitnami/kubectl:latest
+  needs:
+    - promote-to-10
+    - monitor-canary-10
+  script:
+    - |
+      echo "📊 Promoting canary to 25% traffic..."
+
+      # Update traffic weights: 75% stable, 25% canary
+      kubectl patch ingressroute ${INGRESS_NAME} -n ${NAMESPACE} --type=json -p='[
+        {"op":"replace","path":"/spec/routes/0/services/0/weight","value":75},
+        {"op":"replace","path":"/spec/routes/0/services/1/weight","value":25}
+      ]'
+
+      echo "✅ Canary at 25% traffic"
+  environment:
+    name: production
+    url: https://myapp.homelab.local
+  when: manual
+  only:
+    - main
+    - master
+
+# Monitor canary at 25%
+monitor-canary-25:
+  stage: promote-25
+  image: alpine:latest
+  needs: ["promote-to-25"]
+  before_script:
+    - apk add --no-cache curl jq bc
+  script:
+    - |
+      echo "🔍 Monitoring canary at 25% for ${MONITORING_DURATION} seconds..."
+      chmod +x ./scripts/monitor-canary.sh
+      ./scripts/monitor-canary.sh ${MONITORING_DURATION} ${ERROR_RATE_THRESHOLD} ${LATENCY_P95_THRESHOLD}
+
+      if [ $? -ne 0 ]; then
+        echo "❌ Monitoring failed, triggering rollback..."
+        ./scripts/rollback-canary.sh
+        exit 1
+      fi
+
+      echo "✅ Monitoring complete - metrics healthy at 25%"
+  allow_failure: false
+  only:
+    - main
+    - master
+
+# Promote to 50% traffic (manual approval)
+promote-to-50:
+  stage: promote-50
+  image: bitnami/kubectl:latest
+  needs:
+    - promote-to-25
+    - monitor-canary-25
+  script:
+    - |
+      echo "📊 Promoting canary to 50% traffic..."
+
+      # Update traffic weights: 50% stable, 50% canary
+      kubectl patch ingressroute ${INGRESS_NAME} -n ${NAMESPACE} --type=json -p='[
+        {"op":"replace","path":"/spec/routes/0/services/0/weight","value":50},
+        {"op":"replace","path":"/spec/routes/0/services/1/weight","value":50}
+      ]'
+
+      echo "✅ Canary at 50% traffic"
+  environment:
+    name: production
+    url: https://myapp.homelab.local
+  when: manual
+  only:
+    - main
+    - master
+
+# Monitor canary at 50%
+monitor-canary-50:
+  stage: promote-50
+  image: alpine:latest
+  needs: ["promote-to-50"]
+  before_script:
+    - apk add --no-cache curl jq bc
+  script:
+    - |
+      echo "🔍 Monitoring canary at 50% for ${MONITORING_DURATION} seconds..."
+      chmod +x ./scripts/monitor-canary.sh
+      ./scripts/monitor-canary.sh ${MONITORING_DURATION} ${ERROR_RATE_THRESHOLD} ${LATENCY_P95_THRESHOLD}
+
+      if [ $? -ne 0 ]; then
+        echo "❌ Monitoring failed, triggering rollback..."
+        ./scripts/rollback-canary.sh
+        exit 1
+      fi
+
+      echo "✅ Monitoring complete - metrics healthy at 50%"
+  allow_failure: false
+  only:
+    - main
+    - master
+
+# Full promotion: Update stable deployment (manual approval)
+promote-to-100:
+  stage: promote-100
+  image: bitnami/kubectl:latest
+  needs:
+    - promote-to-50
+    - monitor-canary-50
+  script:
+    - |
+      echo "🚀 Full promotion: Updating stable deployment to canary version..."
+
+      # Update stable deployment with canary image
+      kubectl set image deployment/myapp-stable \
+        myapp=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA \
+        -n ${NAMESPACE}
+
+      # Wait for stable rollout
+      kubectl rollout status deployment/myapp-stable -n ${NAMESPACE} --timeout=5m
+
+      # Set traffic back to 100% stable, 0% canary
+      kubectl patch ingressroute ${INGRESS_NAME} -n ${NAMESPACE} --type=json -p='[
+        {"op":"replace","path":"/spec/routes/0/services/0/weight","value":100},
+        {"op":"replace","path":"/spec/routes/0/services/1/weight","value":0}
+      ]'
+
+      echo "✅ Full promotion complete!"
+      echo "Stable deployment updated to new version"
+      echo "Traffic: 100% stable, 0% canary"
+      kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME}
+  environment:
+    name: production
+    url: https://myapp.homelab.local
+  when: manual
+  only:
+    - main
+    - master
+
+# Cleanup: Scale down canary to 0 (optional)
+cleanup-canary:
+  stage: cleanup
+  image: bitnami/kubectl:latest
+  needs: ["promote-to-100"]
+  script:
+    - |
+      echo "Scaling down canary deployment..."
+      kubectl scale deployment/myapp-canary --replicas=0 -n ${NAMESPACE}
+      echo "✅ Canary scaled down"
+  when: manual
+  only:
+    - main
+    - master
+
+# Manual rollback at any stage
+rollback-canary:
+  stage: cleanup
+  image: bitnami/kubectl:latest
+  script:
+    - |
+      echo "⚠️  MANUAL ROLLBACK TRIGGERED"
+      chmod +x ./scripts/rollback-canary.sh
+      ./scripts/rollback-canary.sh
+  environment:
+    name: production
+    url: https://myapp.homelab.local
+  when: manual
+  allow_failure: true
+  only:
+    - main
+    - master

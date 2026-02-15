@@ -1,0 +1,324 @@
+---
+# ============================================================================
+# Playbook: Deploy Velero Disaster Recovery on Kubernetes
+# Article: 19 - Disaster Recovery & Backup Strategy
+# Phase: 8 - Disaster Recovery
+# ============================================================================
+#
+# Description:
+#   Deploys Velero for cluster-wide backup and disaster recovery on an existing
+#   Kubernetes cluster using Helm charts. Provides scheduled backups, on-demand
+#   backups, and restoration capabilities using MinIO as S3-compatible storage.
+#
+# Prerequisites:
+#   - Phase 7 complete (Kubernetes cluster with monitoring operational)
+#   - kubectl configured on master node
+#   - Helm 3 installed
+#   - MinIO or S3-compatible storage available
+#   - Sufficient resources: 512MB RAM, 0.5 CPUs available
+#
+# Usage:
+#   ansible-playbook playbooks/09-deploy-velero.yml
+#
+#   With custom MinIO endpoint:
+#   ansible-playbook playbooks/09-deploy-velero.yml \
+#     -e velero_minio_endpoint=http://minio.storage.svc:9000
+#
+#   Force redeploy:
+#   ansible-playbook playbooks/09-deploy-velero.yml \
+#     -e velero_force_redeploy=true
+#
+# What This Playbook Does:
+#   1. Verifies cluster prerequisites (kubectl, Helm)
+#   2. Creates velero namespace
+#   3. Adds VMware Tanzu Helm repository
+#   4. Deploys Velero with AWS plugin (MinIO-compatible)
+#   5. Configures backup storage location (MinIO)
+#   6. Creates scheduled backup jobs
+#   7. Waits for all pods to be Running
+#   8. Displays backup status and access information
+#
+# Components Deployed:
+#   - Velero server (backup orchestration)
+#   - Velero AWS plugin (S3-compatible storage)
+#   - Backup storage location (MinIO)
+#   - Scheduled backups (full cluster + per-namespace)
+#
+# After Deployment:
+#   - Full cluster backup: daily at 2:00 AM UTC
+#   - GitLab backup: every 6 hours
+#   - Jenkins/ArgoCD backup: daily
+#   - Monitoring backup: daily
+#   - Use velero CLI or kubectl to manage backups/restores
+#
+# Next Steps:
+#   - Verify backup storage location is Available
+#   - Run a test backup: velero backup create test-backup --include-namespaces default
+#   - Test disaster recovery procedure with scripts/backup/disaster-recovery-test.sh
+#   - Configure alerting for failed backups
+#
+# ============================================================================
+
+- name: Deploy Velero Disaster Recovery on Kubernetes
+  hosts: masters
+  become: yes
+  gather_facts: yes
+
+  # =========================================================================
+  # VARIABLES
+  # =========================================================================
+  vars:
+    # Core configuration
+    velero_namespace: velero
+    velero_minio_endpoint: "http://minio.minio.svc:9000"
+    velero_minio_bucket: velero-backups
+
+    # Display banner
+    display_banner: true
+
+  # =========================================================================
+  # PRE-TASKS
+  # =========================================================================
+  pre_tasks:
+    - name: Display deployment banner
+      when: display_banner
+      debug:
+        msg:
+          - "================================================================"
+          - "                                                                "
+          - "       Velero Disaster Recovery Deployment on Kubernetes        "
+          - "         Phase 8: Disaster Recovery                             "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "This playbook will deploy Velero for backup and disaster"
+          - "recovery on your Kubernetes cluster."
+          - ""
+          - "Components:"
+          - "  - Velero server (backup orchestration)"
+          - "  - AWS/S3 plugin (MinIO-compatible storage)"
+          - "  - Backup storage location (MinIO)"
+          - "  - Scheduled backup jobs"
+          - ""
+          - "Deployment time: 3-5 minutes"
+          - "Namespace: {{ velero_namespace }}"
+          - "Storage: {{ velero_minio_endpoint }}"
+          - "Bucket: {{ velero_minio_bucket }}"
+          - ""
+
+    - name: Verify we're on a master node
+      assert:
+        that:
+          - "'masters' in group_names"
+        fail_msg: "This playbook must run on master nodes only"
+        success_msg: "Running on master node"
+
+    - name: Check if kubectl is configured
+      command: kubectl cluster-info
+      register: kubectl_check
+      changed_when: false
+      failed_when: kubectl_check.rc != 0
+
+    - name: Display cluster info
+      debug:
+        msg: "Connected to Kubernetes cluster"
+
+  # =========================================================================
+  # ROLES
+  # =========================================================================
+  roles:
+    - role: velero
+      tags:
+        - velero
+        - backup
+        - phase8
+        - disaster-recovery
+
+  # =========================================================================
+  # POST-TASKS
+  # =========================================================================
+  post_tasks:
+    - name: Wait for Velero pods to stabilize
+      pause:
+        seconds: 15
+        prompt: "Waiting for Velero pods to stabilize..."
+
+    - name: Get final pod status
+      command: kubectl get pods -n {{ velero_namespace }} -o wide
+      register: final_pods
+      changed_when: false
+
+    - name: Display final pod status
+      debug:
+        msg: "{{ final_pods.stdout_lines }}"
+
+    - name: Count Running pods
+      shell: |
+        kubectl get pods -n {{ velero_namespace }} -o json | \
+        jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' | wc -l
+      register: running_pods_count
+      changed_when: false
+
+    - name: Count total pods
+      shell: |
+        kubectl get pods -n {{ velero_namespace }} -o json | \
+        jq -r '.items[] | .metadata.name' | wc -l
+      register: total_pods_count
+      changed_when: false
+
+    - name: Get Velero service endpoints
+      command: kubectl get svc -n {{ velero_namespace }} -o wide
+      register: services
+      changed_when: false
+
+    - name: Display services
+      debug:
+        msg:
+          - ""
+          - "Velero Services:"
+          - "{{ services.stdout_lines }}"
+
+    - name: Get backup storage location status
+      shell: |
+        kubectl get backupstoragelocation -n {{ velero_namespace }} -o wide 2>/dev/null || echo "No backup storage locations found"
+      register: bsl_status
+      changed_when: false
+
+    - name: Display backup storage location status
+      debug:
+        msg:
+          - ""
+          - "Backup Storage Locations:"
+          - "{{ bsl_status.stdout_lines }}"
+
+    - name: Get backup schedules
+      shell: |
+        kubectl get schedules.velero.io -n {{ velero_namespace }} 2>/dev/null || echo "No backup schedules found"
+      register: schedules_status
+      changed_when: false
+
+    - name: Display backup schedules
+      debug:
+        msg:
+          - ""
+          - "Backup Schedules:"
+          - "{{ schedules_status.stdout_lines }}"
+
+    - name: Display deployment statistics
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "  Deployment Statistics"
+          - "================================================================"
+          - "  Pods Running: {{ running_pods_count.stdout | trim }}/{{ total_pods_count.stdout | trim }}"
+          - "  Namespace: {{ velero_namespace }}"
+          - ""
+
+    - name: Display access information
+      debug:
+        msg:
+          - ""
+          - "================================================================"
+          - "                                                                "
+          - "       Velero Disaster Recovery Deployment Completed!           "
+          - "                                                                "
+          - "================================================================"
+          - ""
+          - "Backup Information:"
+          - ""
+          - "1. Backup Schedules:"
+          - "   Full Cluster: Daily at 2:00 AM UTC (30-day retention)"
+          - "   GitLab: Every 6 hours (7-day retention)"
+          - "   Jenkins: Daily (14-day retention)"
+          - "   ArgoCD: Daily (14-day retention)"
+          - "   Monitoring: Daily (7-day retention)"
+          - ""
+          - "2. Useful Commands:"
+          - "   velero backup get"
+          - "   velero schedule get"
+          - "   velero backup-location get"
+          - "   velero backup create manual-backup --include-namespaces default"
+          - "   velero restore create --from-backup <backup-name>"
+          - ""
+          - "3. kubectl Commands:"
+          - "   kubectl get all -n {{ velero_namespace }}"
+          - "   kubectl get backups.velero.io -n {{ velero_namespace }}"
+          - "   kubectl get schedules.velero.io -n {{ velero_namespace }}"
+          - "   kubectl get restores.velero.io -n {{ velero_namespace }}"
+          - ""
+          - "4. Scripts:"
+          - "   scripts/backup/velero-backup-status.sh    - Check backup status"
+          - "   scripts/backup/etcd-backup.sh             - Manual etcd backup"
+          - "   scripts/backup/disaster-recovery-test.sh  - Test DR procedure"
+          - ""
+          - "IMPORTANT:"
+          - "   - Verify backup storage location shows 'Available'"
+          - "   - Run disaster-recovery-test.sh to validate the setup"
+          - "   - Monitor for failed backups in Grafana"
+          - ""
+          - "Documentation:"
+          - "   - Article 19: docs/articles/Article-19-Disaster-Recovery.md"
+          - "   - Role README: ansible/roles/velero/README.md"
+          - ""
+          - "Next Steps:"
+          - "   - Install Velero CLI on your workstation"
+          - "   - Run a test backup and restore"
+          - "   - Set up alerting for failed backups"
+          - "   - Document your DR runbook"
+          - ""
+
+    - name: Save deployment information to file
+      copy:
+        content: |
+          # Velero Disaster Recovery Deployment Information
+          # Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Backup Information
+          - Storage: {{ velero_minio_endpoint }}
+          - Bucket: {{ velero_minio_bucket }}
+          - Namespace: {{ velero_namespace }}
+
+          ## Backup Schedules
+          - Full Cluster: Daily at 2:00 AM UTC (30-day retention)
+          - GitLab: Every 6 hours (7-day retention)
+          - Jenkins: Daily (14-day retention)
+          - ArgoCD: Daily (14-day retention)
+          - Monitoring: Daily (7-day retention)
+
+          ## Useful Commands
+          ```bash
+          # Check backup status
+          velero backup get
+
+          # Check schedules
+          velero schedule get
+
+          # Create manual backup
+          velero backup create manual-backup --include-namespaces default
+
+          # Restore from backup
+          velero restore create --from-backup <backup-name>
+
+          # Check pods
+          kubectl get pods -n {{ velero_namespace }}
+
+          # Check backup storage locations
+          kubectl get backupstoragelocation -n {{ velero_namespace }}
+          ```
+
+          ## Deployment Details
+          - Namespace: {{ velero_namespace }}
+          - Deployment Date: {{ ansible_date_time.date }}
+          - Deployed By: {{ ansible_user_id }}
+          - Ansible Host: {{ inventory_hostname }}
+
+          ## Documentation
+          - Article 19: docs/articles/Article-19-Disaster-Recovery.md
+          - Role README: ansible/roles/velero/README.md
+        dest: "/tmp/velero-deployment-info-{{ ansible_date_time.epoch }}.md"
+        mode: '0644'
+
+    - name: Display deployment info file location
+      debug:
+        msg: "Deployment information saved to: /tmp/velero-deployment-info-{{ ansible_date_time.epoch }}.md"

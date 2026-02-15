@@ -1,0 +1,302 @@
+# Blue-Green Deployment Pipeline
+# Automates zero-downtime deployments using blue-green strategy
+#
+# Flow:
+# 1. Detect which environment is currently active
+# 2. Deploy new version to inactive environment
+# 3. Run smoke tests against inactive environment
+# 4. Manual approval gate
+# 5. Switch traffic to newly deployed environment
+# 6. Optional: Scale down old environment
+
+stages:
+  - build
+  - deploy-inactive
+  - test-inactive
+  - switch
+  - cleanup
+
+variables:
+  NAMESPACE: "production"
+  APP_NAME: "myapp"
+  ACTIVE_ENV: ""
+  INACTIVE_ENV: ""
+
+# Determine current active environment
+.detect-active:
+  image: bitnami/kubectl:latest
+  before_script:
+    - |
+      echo "Detecting current active environment..."
+      # Get the version label from production service selector
+      ACTIVE_VERSION=$(kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME},role=active -o jsonpath='{.items[0].metadata.labels.version}' 2>/dev/null || echo "")
+
+      if [ "$ACTIVE_VERSION" = "blue" ]; then
+        export ACTIVE_ENV="blue"
+        export INACTIVE_ENV="green"
+      elif [ "$ACTIVE_VERSION" = "green" ]; then
+        export ACTIVE_ENV="green"
+        export INACTIVE_ENV="blue"
+      else
+        # No active environment, default to deploying to blue
+        echo "No active environment detected, defaulting to blue as inactive"
+        export ACTIVE_ENV="green"
+        export INACTIVE_ENV="blue"
+      fi
+
+      echo "Active environment: ${ACTIVE_ENV}"
+      echo "Deploying to inactive environment: ${INACTIVE_ENV}"
+      echo "ACTIVE_ENV=${ACTIVE_ENV}" >> deploy.env
+      echo "INACTIVE_ENV=${INACTIVE_ENV}" >> deploy.env
+  artifacts:
+    reports:
+      dotenv: deploy.env
+
+# Build Docker image
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - |
+      echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - |
+      /kaniko/executor \
+        --context $CI_PROJECT_DIR \
+        --dockerfile $CI_PROJECT_DIR/Dockerfile \
+        --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA \
+        --destination $CI_REGISTRY_IMAGE:latest \
+        --cache=true \
+        --cleanup
+
+# Detect active environment
+detect-active:
+  extends: .detect-active
+  stage: deploy-inactive
+  needs: ["build-image"]
+
+# Deploy to inactive environment
+deploy-to-inactive:
+  stage: deploy-inactive
+  image: bitnami/kubectl:latest
+  needs:
+    - build-image
+    - detect-active
+  script:
+    - |
+      echo "Deploying version $CI_COMMIT_SHA to ${INACTIVE_ENV} environment"
+
+      # Update deployment image
+      kubectl set image deployment/myapp-${INACTIVE_ENV} \
+        myapp=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA \
+        -n ${NAMESPACE}
+
+      # Ensure pods are labeled as inactive
+      kubectl label pods -l app=${APP_NAME},version=${INACTIVE_ENV} \
+        role=inactive \
+        --overwrite \
+        -n ${NAMESPACE}
+
+      # Wait for rollout to complete
+      kubectl rollout status deployment/myapp-${INACTIVE_ENV} \
+        -n ${NAMESPACE} \
+        --timeout=5m
+
+      echo "Deployment to ${INACTIVE_ENV} complete"
+      kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME},version=${INACTIVE_ENV}
+  environment:
+    name: production-${INACTIVE_ENV}
+
+# Smoke test inactive environment
+smoke-test-inactive:
+  stage: test-inactive
+  image: curlimages/curl:latest
+  needs:
+    - deploy-to-inactive
+    - detect-active
+  script:
+    - |
+      echo "Running smoke tests against ${INACTIVE_ENV} environment..."
+      INACTIVE_SERVICE="myapp-${INACTIVE_ENV}.${NAMESPACE}.svc.cluster.local"
+
+      # Health check
+      echo "Testing health endpoint..."
+      curl -f http://${INACTIVE_SERVICE}/health || exit 1
+
+      # Ready check
+      echo "Testing ready endpoint..."
+      curl -f http://${INACTIVE_SERVICE}/ready || exit 1
+
+      # Application endpoint
+      echo "Testing main endpoint..."
+      RESPONSE=$(curl -s http://${INACTIVE_SERVICE}/)
+      echo "Response: $RESPONSE"
+
+      # Verify version
+      VERSION=$(curl -s http://${INACTIVE_SERVICE}/version || echo "unknown")
+      echo "Deployed version: $VERSION"
+
+      echo "✅ Smoke tests passed for ${INACTIVE_ENV} environment"
+  allow_failure: false
+  retry:
+    max: 3
+    when:
+      - script_failure
+
+# Load test inactive environment (optional)
+load-test-inactive:
+  stage: test-inactive
+  image: grafana/k6:latest
+  needs:
+    - deploy-to-inactive
+    - detect-active
+  script:
+    - |
+      echo "Running load tests against ${INACTIVE_ENV} environment..."
+      INACTIVE_SERVICE="myapp-${INACTIVE_ENV}.${NAMESPACE}.svc.cluster.local"
+
+      # Simple load test with k6
+      k6 run - <<EOF
+      import http from 'k6/http';
+      import { check, sleep } from 'k6';
+
+      export let options = {
+        stages: [
+          { duration: '30s', target: 10 },  // Ramp up to 10 users
+          { duration: '1m', target: 10 },   // Stay at 10 users
+          { duration: '10s', target: 0 },   // Ramp down
+        ],
+        thresholds: {
+          http_req_duration: ['p(95)<500'],  // 95% of requests under 500ms
+          http_req_failed: ['rate<0.01'],    // Less than 1% errors
+        },
+      };
+
+      export default function () {
+        let res = http.get('http://${INACTIVE_SERVICE}/');
+        check(res, {
+          'status is 200': (r) => r.status === 200,
+          'response time < 500ms': (r) => r.timings.duration < 500,
+        });
+        sleep(1);
+      }
+      EOF
+  when: manual
+  allow_failure: true
+
+# Switch traffic to new environment
+switch-traffic:
+  stage: switch
+  image: bitnami/kubectl:latest
+  needs:
+    - smoke-test-inactive
+    - detect-active
+  script:
+    - |
+      echo "===================================="
+      echo "SWITCHING PRODUCTION TRAFFIC"
+      echo "From: ${ACTIVE_ENV} → To: ${INACTIVE_ENV}"
+      echo "===================================="
+
+      # Label new environment pods as active
+      echo "Setting ${INACTIVE_ENV} pods to active..."
+      kubectl label pods -l app=${APP_NAME},version=${INACTIVE_ENV} \
+        role=active \
+        --overwrite \
+        -n ${NAMESPACE}
+
+      # Label old environment pods as inactive
+      echo "Setting ${ACTIVE_ENV} pods to inactive..."
+      kubectl label pods -l app=${APP_NAME},version=${ACTIVE_ENV} \
+        role=inactive \
+        --overwrite \
+        -n ${NAMESPACE} || true
+
+      # Verify the switch
+      echo ""
+      echo "Verifying traffic switch..."
+      kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME} -L role,version
+
+      echo ""
+      echo "✅ Traffic switched from ${ACTIVE_ENV} to ${INACTIVE_ENV}"
+      echo "Production is now running on ${INACTIVE_ENV}"
+      echo "Old ${ACTIVE_ENV} environment is still running for quick rollback"
+  environment:
+    name: production
+    url: https://myapp.homelab.local
+  when: manual  # Require manual approval before switching traffic
+
+# Rollback (manual trigger)
+rollback:
+  stage: switch
+  image: bitnami/kubectl:latest
+  needs:
+    - detect-active
+  script:
+    - |
+      echo "===================================="
+      echo "ROLLING BACK DEPLOYMENT"
+      echo "From: ${INACTIVE_ENV} → To: ${ACTIVE_ENV}"
+      echo "===================================="
+
+      # Revert labels
+      kubectl label pods -l app=${APP_NAME},version=${ACTIVE_ENV} \
+        role=active \
+        --overwrite \
+        -n ${NAMESPACE}
+
+      kubectl label pods -l app=${APP_NAME},version=${INACTIVE_ENV} \
+        role=inactive \
+        --overwrite \
+        -n ${NAMESPACE}
+
+      echo "✅ Rolled back to ${ACTIVE_ENV}"
+      kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME} -L role,version
+  environment:
+    name: production
+    url: https://myapp.homelab.local
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+
+# Scale down old environment (optional cleanup)
+scale-down-old:
+  stage: cleanup
+  image: bitnami/kubectl:latest
+  needs:
+    - switch-traffic
+    - detect-active
+  script:
+    - |
+      echo "Scaling down old ${ACTIVE_ENV} environment to 1 replica..."
+      kubectl scale deployment myapp-${ACTIVE_ENV} \
+        --replicas=1 \
+        -n ${NAMESPACE}
+
+      echo "Old environment scaled down but still available for quick rollback"
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Full cleanup of old environment (use with caution)
+cleanup-old:
+  stage: cleanup
+  image: bitnami/kubectl:latest
+  needs:
+    - switch-traffic
+    - detect-active
+  script:
+    - |
+      echo "⚠️  SCALING DOWN OLD ENVIRONMENT TO 0"
+      kubectl scale deployment myapp-${ACTIVE_ENV} \
+        --replicas=0 \
+        -n ${NAMESPACE}
+
+      echo "Old ${ACTIVE_ENV} environment stopped (can be restarted for rollback)"
+  when: manual
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"

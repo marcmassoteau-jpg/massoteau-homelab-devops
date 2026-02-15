@@ -1,0 +1,24 @@
+# Green Service
+# Direct access to green environment for testing before traffic switch
+# Useful for smoke tests and validation
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-green
+  namespace: production
+  labels:
+    app: myapp
+    version: green
+    service-type: test
+spec:
+  selector:
+    app: myapp
+    version: green
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None

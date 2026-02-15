@@ -1,0 +1,68 @@
+# Stable Deployment
+# Current production version serving majority of traffic
+# This is the baseline version that canary releases are compared against
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-stable
+  namespace: production
+  labels:
+    app: myapp
+    version: stable
+    deployment-strategy: canary
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+      version: stable
+  template:
+    metadata:
+      labels:
+        app: myapp
+        version: stable
+        track: stable
+    spec:
+      containers:
+      - name: myapp
+        image: registry.gitlab.homelab.local/myproject/myapp:stable
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: VERSION
+          value: "stable"
+        - name: ENVIRONMENT
+          value: "production"
+        - name: TRACK
+          value: "stable"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

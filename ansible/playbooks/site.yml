@@ -28,5 +28,23 @@
 - name: Step 4 - Install Kubernetes
   ansible.builtin.import_playbook: 04-install-kubernetes.yml
 
-- name: Step 5 - Verify cluster
+- name: Step 5 - Deploy GitLab
+  ansible.builtin.import_playbook: 05-deploy-gitlab.yml
+
+- name: Step 6 - Deploy ArgoCD
+  ansible.builtin.import_playbook: 06-deploy-argocd.yml
+
+- name: Step 7 - Deploy Jenkins
+  ansible.builtin.import_playbook: 07-deploy-jenkins.yml
+
+- name: Step 8 - Deploy Monitoring Stack
+  ansible.builtin.import_playbook: 08-deploy-monitoring.yml
+
+- name: Step 9 - Deploy Velero
+  ansible.builtin.import_playbook: 09-deploy-velero.yml
+
+- name: Step 10 - Deploy Cluster Autoscaler
+  ansible.builtin.import_playbook: 10-deploy-cluster-autoscaler.yml
+
+- name: Step 11 - Verify cluster
   ansible.builtin.import_playbook: 99-verify-cluster.yml

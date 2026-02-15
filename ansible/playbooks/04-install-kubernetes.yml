@@ -2,18 +2,350 @@
 # Playbook: Install Kubernetes
 # Purpose: Initialize Kubernetes cluster
 # - Initialize control plane on master
+# - Install CNI (Calico)
 # - Join worker nodes to cluster
 
-- name: Install Kubernetes cluster
-  hosts: k8s_cluster
+# Step 1: Initialize Kubernetes Control Plane (Master Node Only)
+- name: Initialize Kubernetes control plane
+  hosts: masters
+  become: true
+  gather_facts: true
+
+  vars:
+    pod_network_cidr: "10.244.0.0/16"  # Calico default
+    kubernetes_api_server_advertise_address: "{{ ansible_default_ipv4.address }}"
+    kubeconfig_path: "/home/{{ ansible_user }}/.kube/config"
+
+  tasks:
+    - name: Check if Kubernetes is already initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_init_status
+
+    - name: Initialize Kubernetes cluster with kubeadm
+      ansible.builtin.command:
+        cmd: >
+          kubeadm init
+          --pod-network-cidr={{ pod_network_cidr }}
+          --apiserver-advertise-address={{ kubernetes_api_server_advertise_address }}
+          --node-name={{ ansible_hostname }}
+      when: not kubeadm_init_status.stat.exists
+      register: kubeadm_init
+      changed_when: kubeadm_init.rc == 0
+
+    - name: Create .kube directory for user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copy admin.conf to user's kube config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ kubeconfig_path }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+        remote_src: true
+
+    - name: Create .kube directory for root
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to root's kube config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        mode: '0600'
+        remote_src: true
+
+    - name: Generate join command for worker nodes
+      ansible.builtin.command:
+        cmd: kubeadm token create --print-join-command
+      register: join_command
+      changed_when: false
+
+    - name: Save join command to local file
+      ansible.builtin.copy:
+        content: "{{ join_command.stdout }}"
+        dest: "/tmp/kubernetes-join-command.sh"
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+
+    - name: Display control plane initialization status
+      ansible.builtin.debug:
+        msg:
+          - "Kubernetes control plane initialized successfully!"
+          - "Master node: {{ ansible_hostname }} ({{ kubernetes_api_server_advertise_address }})"
+          - "Pod network CIDR: {{ pod_network_cidr }}"
+          - ""
+          - "Next steps:"
+          - "1. Install CNI plugin (Calico)"
+          - "2. Join worker nodes using saved join command"
+          - ""
+          - "Verify control plane:"
+          - "  kubectl get nodes"
+          - "  kubectl get pods -A"
+
+# Step 2: Install Calico CNI Plugin
+- name: Install Calico CNI network plugin
+  hosts: masters
+  become: true
+  gather_facts: false
+
+  vars:
+    calico_version: "v3.27.0"
+    calico_manifest_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml"
+
+  tasks:
+    - name: Wait for control plane to be ready
+      ansible.builtin.command:
+        cmd: kubectl get nodes
+      register: kubectl_nodes
+      retries: 12
+      delay: 5
+      until: kubectl_nodes.rc == 0
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Download Calico manifest
+      ansible.builtin.get_url:
+        url: "{{ calico_manifest_url }}"
+        dest: "/tmp/calico.yaml"
+        mode: '0644'
+      become_user: "{{ ansible_user }}"
+
+    - name: Check if Calico is already installed
+      ansible.builtin.command:
+        cmd: kubectl get daemonset calico-node -n kube-system
+      register: calico_status
+      failed_when: false
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Apply Calico CNI manifest
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/calico.yaml
+      when: calico_status.rc != 0
+      register: calico_install
+      changed_when: "'created' in calico_install.stdout or 'configured' in calico_install.stdout"
+      become_user: "{{ ansible_user }}"
+
+    - name: Wait for Calico pods to be ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Ready pods -l k8s-app=calico-node -n kube-system --timeout=300s
+      register: calico_ready
+      retries: 3
+      delay: 10
+      until: calico_ready.rc == 0
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Display Calico installation status
+      ansible.builtin.debug:
+        msg:
+          - "Calico CNI installed successfully!"
+          - "Version: {{ calico_version }}"
+          - ""
+          - "Verify Calico pods:"
+          - "  kubectl get pods -n kube-system -l k8s-app=calico-node"
+
+# Step 3: Join Worker Nodes to Cluster
+- name: Join worker nodes to Kubernetes cluster
+  hosts: workers
   become: true
   gather_facts: true
 
   tasks:
-    - name: Placeholder - Kubernetes installation
-      ansible.builtin.debug:
-        msg: "Kubernetes installation will be implemented in upcoming articles"
+    - name: Check if node is already part of cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf_status
 
-    # TODO: Initialize Kubernetes control plane
-    # TODO: Configure CNI (Flannel/Calico)
-    # TODO: Join worker nodes
+    - name: Read join command from control plane
+      ansible.builtin.slurp:
+        src: /tmp/kubernetes-join-command.sh
+      register: join_command_encoded
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: not kubelet_conf_status.stat.exists
+
+    - name: Decode join command
+      ansible.builtin.set_fact:
+        join_command: "{{ join_command_encoded.content | b64decode | trim }}"
+      when: not kubelet_conf_status.stat.exists
+
+    - name: Join worker node to cluster
+      ansible.builtin.command:
+        cmd: "{{ join_command }}"
+      when: not kubelet_conf_status.stat.exists
+      register: join_result
+      changed_when: "'This node has joined the cluster' in join_result.stdout"
+
+    - name: Wait for node to be ready
+      ansible.builtin.command:
+        cmd: kubectl get node {{ ansible_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: node_ready
+      retries: 12
+      delay: 10
+      until: node_ready.stdout == "True"
+      changed_when: false
+      delegate_to: "{{ groups['masters'][0] }}"
+      become_user: ubuntu
+
+    - name: Display worker join status
+      ansible.builtin.debug:
+        msg:
+          - "Worker node {{ ansible_hostname }} joined successfully!"
+          - "IP: {{ ansible_default_ipv4.address }}"
+      when: not kubelet_conf_status.stat.exists
+
+# Step 4: Label Worker Nodes
+- name: Label worker nodes
+  hosts: masters
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Label worker nodes with role
+      ansible.builtin.command:
+        cmd: kubectl label node {{ item }} node-role.kubernetes.io/worker=worker --overwrite
+      loop: "{{ groups['workers'] }}"
+      register: label_result
+      changed_when: "'labeled' in label_result.stdout"
+      failed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Display cluster nodes
+      ansible.builtin.command:
+        cmd: kubectl get nodes -o wide
+      register: cluster_nodes
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Show cluster status
+      ansible.builtin.debug:
+        msg: "{{ cluster_nodes.stdout_lines }}"
+
+# Step 5: Deploy Metrics Server
+- name: Deploy Kubernetes metrics-server
+  hosts: masters
+  become: true
+  gather_facts: false
+
+  vars:
+    metrics_server_version: "v0.7.0"
+    metrics_server_manifest_url: "https://github.com/kubernetes-sigs/metrics-server/releases/download/{{ metrics_server_version }}/components.yaml"
+
+  tasks:
+    - name: Check if metrics-server is already deployed
+      ansible.builtin.command:
+        cmd: kubectl get deployment metrics-server -n kube-system
+      register: metrics_server_status
+      failed_when: false
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Download metrics-server manifest
+      ansible.builtin.get_url:
+        url: "{{ metrics_server_manifest_url }}"
+        dest: "/tmp/metrics-server.yaml"
+        mode: '0644'
+      become_user: "{{ ansible_user }}"
+      when: metrics_server_status.rc != 0
+
+    - name: Deploy metrics-server
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/metrics-server.yaml
+      when: metrics_server_status.rc != 0
+      register: metrics_deploy
+      changed_when: "'created' in metrics_deploy.stdout or 'configured' in metrics_deploy.stdout"
+      become_user: "{{ ansible_user }}"
+      failed_when: false
+
+    - name: Patch metrics-server deployment for self-signed certificates (homelab)
+      ansible.builtin.command:
+        cmd: kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+      when: metrics_server_status.rc != 0
+      register: metrics_patch
+      changed_when: "'patched' in metrics_patch.stdout"
+      become_user: "{{ ansible_user }}"
+
+    - name: Wait for metrics-server to be ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Available deployment/metrics-server -n kube-system --timeout=300s
+      register: metrics_ready
+      retries: 3
+      delay: 10
+      until: metrics_ready.rc == 0
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Display metrics-server status
+      ansible.builtin.debug:
+        msg:
+          - "Metrics-server deployed successfully!"
+          - "Version: {{ metrics_server_version }}"
+          - ""
+          - "Test metrics-server:"
+          - "  kubectl top nodes"
+          - "  kubectl top pods -A"
+
+# Step 6: Verification
+- name: Verify Kubernetes cluster
+  hosts: masters
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Get all nodes
+      ansible.builtin.command:
+        cmd: kubectl get nodes
+      register: all_nodes
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Get all system pods
+      ansible.builtin.command:
+        cmd: kubectl get pods -n kube-system
+      register: system_pods
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Get cluster info
+      ansible.builtin.command:
+        cmd: kubectl cluster-info
+      register: cluster_info
+      changed_when: false
+      become_user: "{{ ansible_user }}"
+
+    - name: Display final cluster status
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "KUBERNETES CLUSTER DEPLOYED SUCCESSFULLY!"
+          - "============================================"
+          - ""
+          - "NODES:"
+          - "{{ all_nodes.stdout }}"
+          - ""
+          - "SYSTEM PODS:"
+          - "{{ system_pods.stdout }}"
+          - ""
+          - "CLUSTER INFO:"
+          - "{{ cluster_info.stdout }}"
+          - ""
+          - "Next steps:"
+          - "  1. Test pod deployment: kubectl run test-pod --image=nginx --restart=Never"
+          - "  2. Test DNS: kubectl exec test-pod -- nslookup kubernetes.default"
+          - "  3. Test metrics: kubectl top nodes"
+          - "  4. Deploy applications using kubectl or Helm"
+          - ""
+          - "Access cluster from your workstation:"
+          - "  scp ubuntu@192.168.1.240:~/.kube/config ~/.kube/config"

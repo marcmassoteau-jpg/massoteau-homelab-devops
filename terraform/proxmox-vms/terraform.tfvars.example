@@ -1,0 +1,70 @@
+# Terraform Variables Example
+#
+# Copy this file to terraform.tfvars and update with your actual values.
+# The terraform.tfvars file is gitignored to prevent exposing sensitive data.
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   nano terraform.tfvars  # Edit with your values
+#   terraform plan
+
+# ============================================
+# Proxmox Connection
+# ============================================
+
+proxmox_api_url          = "https://192.168.1.222:8006/api2/json"
+proxmox_api_token_id     = "terraform@pam!terraform"
+proxmox_api_token_secret = "your-api-token-secret-here"
+proxmox_node             = "pve"
+proxmox_storage          = "local-lvm"
+
+# ============================================
+# VM Template
+# ============================================
+
+vm_template_name = "ubuntu-2204-template"
+
+# ============================================
+# Network Configuration
+# ============================================
+
+network_bridge = "vmbr0"
+gateway        = "192.168.1.1"
+dns_servers    = "192.168.1.1 8.8.8.8"
+
+# ============================================
+# SSH Access
+# ============================================
+
+# Paste your SSH public key here (from ~/.ssh/id_rsa.pub or similar)
+ssh_public_key = <<-EOT
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... your-public-key-here
+EOT
+
+# ============================================
+# Master Node
+# ============================================
+
+master_node_name  = "k8s-master-tf"
+master_ip         = "192.168.1.250"
+master_cpu_cores  = 4
+master_memory_mb  = 8192
+master_disk_size  = "100G"
+
+# ============================================
+# Worker Nodes
+# ============================================
+
+worker_count       = 4
+worker_node_prefix = "k8s-worker-tf"
+worker_base_ip     = "192.168.1.251"
+worker_cpu_cores   = 4
+worker_memory_mb   = 16384
+worker_disk_size   = "200G"
+
+# ============================================
+# Environment
+# ============================================
+
+environment = "homelab"
+tags        = "kubernetes,terraform,homelab"

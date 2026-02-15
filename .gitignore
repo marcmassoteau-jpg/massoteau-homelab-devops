@@ -7,6 +7,8 @@
 **/*key*.pub
 .ssh/
 credentials/
+kubeconfig-standalone.yaml
+docs/testing/pre-testing-backups/config-secrets-*.yaml
 
 # Terraform
 .terraform/
@@ -51,6 +53,11 @@ article-*.md
 
 # Article assets
 screenshots/
+docs/articles/images/
+docs/articles/MEDIUM-URLS.md
+
+# Cluster backup snapshots (contain infrastructure details)
+docs/testing/pre-testing-backups/*.yaml
 
 # Old demo files (capital K at root only)
 /Kubernetes/
