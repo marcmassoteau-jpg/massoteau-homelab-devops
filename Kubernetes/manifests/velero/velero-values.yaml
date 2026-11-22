@@ -1,0 +1,181 @@
+# Velero Helm Values - Homelab Disaster Recovery Configuration
+# Compatible with Velero Helm chart v7.2.1 (vmware-tanzu)
+# Designed for local Kubernetes cluster with MinIO as S3-compatible storage
+#
+# Deployment: helm install velero vmware-tanzu/velero -f velero-values.yaml -n velero --create-namespace
+# Upgrade: helm upgrade velero vmware-tanzu/velero -f velero-values.yaml -n velero
+
+#=============================================================================
+# INIT CONTAINERS - Velero Plugins
+#=============================================================================
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.10.1
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+#=============================================================================
+# VELERO CONFIGURATION
+#=============================================================================
+configuration:
+  # Backup storage location - MinIO S3-compatible
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: velero-backups
+      default: true
+      config:
+        region: minio
+        s3ForcePathStyle: "true"
+        s3Url: http://minio.minio.svc:9000
+        publicUrl: http://minio.homelab.local:9000
+
+  # Volume snapshot location - disabled for homelab
+  # CSI snapshots are not available in this environment
+  volumeSnapshotLocation:
+    - name: default
+      provider: aws
+      config:
+        region: minio
+
+  # Default backup TTL
+  defaultBackupTTL: 720h
+
+  # Use restic/kopia for file-level backups of PVs
+  defaultVolumesToFsBackup: true
+
+  # Log level
+  logLevel: info
+
+  # Namespace filter - do not backup velero itself by default
+  defaultBackupExcludedNamespaces:
+    - velero
+
+#=============================================================================
+# CREDENTIALS
+#=============================================================================
+credentials:
+  useSecret: true
+  existingSecret: velero-credentials
+
+#=============================================================================
+# RESOURCES
+#=============================================================================
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+#=============================================================================
+# NODE AGENT (RESTIC/KOPIA) - File-level PV Backups
+#=============================================================================
+deployNodeAgent: true
+
+nodeAgent:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+#=============================================================================
+# METRICS
+#=============================================================================
+metrics:
+  enabled: true
+  scrapeInterval: 30s
+
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+
+  prometheusRule:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+    spec:
+      - alert: VeleroBackupPartialFailures
+        annotations:
+          message: "Velero backup {{ $labels.schedule }} has {{ $value }} partial failures."
+        expr: increase(velero_backup_partial_failure_total[1h]) > 0
+        for: 15m
+        labels:
+          severity: warning
+      - alert: VeleroBackupFailures
+        annotations:
+          message: "Velero backup {{ $labels.schedule }} has {{ $value }} failures."
+        expr: increase(velero_backup_failure_total[1h]) > 0
+        for: 15m
+        labels:
+          severity: critical
+
+#=============================================================================
+# SCHEDULES
+#=============================================================================
+schedules:
+  full-cluster-daily:
+    disabled: false
+    schedule: "0 2 * * *"
+    useOwnerReferencesInBackup: false
+    template:
+      ttl: 720h
+      includedNamespaces:
+        - "*"
+      excludedNamespaces:
+        - kube-system
+        - kube-public
+        - kube-node-lease
+      snapshotVolumes: false
+      defaultVolumesToFsBackup: true
+
+  gitlab-backup:
+    disabled: false
+    schedule: "0 */6 * * *"
+    useOwnerReferencesInBackup: false
+    template:
+      ttl: 168h
+      includedNamespaces:
+        - gitlab
+      snapshotVolumes: false
+      defaultVolumesToFsBackup: true
+
+  jenkins-backup:
+    disabled: false
+    schedule: "0 3 * * *"
+    useOwnerReferencesInBackup: false
+    template:
+      ttl: 336h
+      includedNamespaces:
+        - jenkins
+      snapshotVolumes: false
+      defaultVolumesToFsBackup: true
+
+  argocd-backup:
+    disabled: false
+    schedule: "0 3 * * *"
+    useOwnerReferencesInBackup: false
+    template:
+      ttl: 336h
+      includedNamespaces:
+        - argocd
+      snapshotVolumes: false
+      defaultVolumesToFsBackup: true
+
+  monitoring-backup:
+    disabled: false
+    schedule: "0 4 * * *"
+    useOwnerReferencesInBackup: false
+    template:
+      ttl: 168h
+      includedNamespaces:
+        - monitoring
+      snapshotVolumes: false
+      defaultVolumesToFsBackup: true

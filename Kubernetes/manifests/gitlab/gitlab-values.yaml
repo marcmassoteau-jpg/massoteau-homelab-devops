@@ -1,0 +1,353 @@
+# GitLab Helm Chart Values - Homelab Optimized Configuration
+# Compatible with GitLab Helm Chart v7.x
+# Designed for local Kubernetes cluster with 72GB RAM, 20 vCPUs
+#
+# Deployment: helm install gitlab gitlab/gitlab -f gitlab-values.yaml -n gitlab --create-namespace
+# Upgrade: helm upgrade gitlab gitlab/gitlab -f gitlab-values.yaml -n gitlab
+
+#=============================================================================
+# GLOBAL CONFIGURATION
+#=============================================================================
+global:
+  # Edition: Community Edition (CE) - free and open source
+  edition: ce
+
+  # Domain configuration - customize for your homelab
+  hosts:
+    domain: homelab.local
+    https: false  # Use HTTP for initial setup, enable HTTPS with cert-manager later
+    gitlab:
+      name: gitlab.homelab.local
+    registry:
+      name: registry.gitlab.homelab.local
+    minio:
+      name: minio.gitlab.homelab.local
+
+  # Ingress configuration for Traefik
+  ingress:
+    enabled: true
+    class: traefik
+    configureCertmanager: false  # Manage certificates separately
+    tls:
+      enabled: false  # Disable TLS initially, can enable with cert-manager
+    annotations:
+      kubernetes.io/ingress.class: "traefik"
+
+  # GitLab Shell (SSH access for Git)
+  shell:
+    port: 22
+
+  # Time zone
+  time_zone: UTC
+
+  # Gitaly (Git repository storage)
+  gitaly:
+    enabled: true
+    authToken:
+      secret: gitlab-gitaly-secret
+      key: token
+    persistence:
+      enabled: true
+      storageClass: local-path
+      size: 50Gi
+      accessMode: ReadWriteOnce
+
+  # Object storage with MinIO (bundled)
+  minio:
+    enabled: true
+    credentials:
+      secret: gitlab-minio-secret
+
+  # Container Registry
+  registry:
+    enabled: true
+    bucket: registry
+
+  # Backup/restore settings
+  appConfig:
+    # Enable object storage for all services
+    lfs:
+      enabled: true
+      proxy_download: true
+      bucket: git-lfs
+      connection:
+        secret: gitlab-rails-storage
+        key: connection
+
+    artifacts:
+      enabled: true
+      proxy_download: true
+      bucket: gitlab-artifacts
+      connection:
+        secret: gitlab-rails-storage
+        key: connection
+
+    uploads:
+      enabled: true
+      proxy_download: true
+      bucket: gitlab-uploads
+      connection:
+        secret: gitlab-rails-storage
+        key: connection
+
+    packages:
+      enabled: true
+      proxy_download: true
+      bucket: gitlab-packages
+      connection:
+        secret: gitlab-rails-storage
+        key: connection
+
+    backups:
+      bucket: gitlab-backups
+      tmpBucket: tmp
+
+#=============================================================================
+# GITLAB COMPONENTS - RESOURCE ALLOCATION
+#=============================================================================
+
+# Webservice (main GitLab Rails app)
+gitlab:
+  webservice:
+    enabled: true
+    replicas: 1  # Single replica for homelab
+
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 2
+        memory: 4Gi
+
+    workerProcesses: 2
+
+    # Puma web server configuration
+    puma:
+      workerMaxMemory: 1024  # MB
+
+    deployment:
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
+
+  # Sidekiq (background jobs)
+  sidekiq:
+    enabled: true
+    replicas: 1
+
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: 1
+        memory: 2Gi
+
+  # GitLab Shell (SSH)
+  gitlab-shell:
+    enabled: true
+    replicas: 1
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  # Gitaly (Git repository storage) - MOVED TO GLOBAL CONFIG
+  # gitaly:
+  #   enabled: true
+  #   replicas: 1
+  #
+  #   resources:
+  #     requests:
+  #       cpu: 250m
+  #       memory: 512Mi
+  #     limits:
+  #       cpu: 1
+  #       memory: 1Gi
+  #
+  #   persistence:
+  #     enabled: true
+  #     storageClass: local-path
+  #     size: 50Gi
+  #     accessMode: ReadWriteOnce
+
+  # Migrations job
+  migrations:
+    enabled: true
+
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1
+        memory: 1Gi
+
+#=============================================================================
+# CONTAINER REGISTRY
+#=============================================================================
+registry:
+  enabled: true
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+#=============================================================================
+# POSTGRESQL DATABASE
+#=============================================================================
+postgresql:
+  install: true
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+    accessMode: ReadWriteOnce
+
+  metrics:
+    enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+#=============================================================================
+# REDIS CACHE
+#=============================================================================
+redis:
+  install: true
+
+  architecture: standalone  # Single instance for homelab
+
+  master:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+
+    persistence:
+      enabled: true
+      storageClass: local-path
+      size: 5Gi
+      accessMode: ReadWriteOnce
+
+  metrics:
+    enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+#=============================================================================
+# MINIO (OBJECT STORAGE)
+#=============================================================================
+minio:
+  install: true
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 50Gi
+    accessMode: ReadWriteOnce
+
+  defaultBuckets:
+    - name: registry
+    - name: git-lfs
+    - name: gitlab-artifacts
+    - name: gitlab-uploads
+    - name: gitlab-packages
+    - name: gitlab-backups
+    - name: tmp
+
+#=============================================================================
+# NGINX INGRESS (if not using Traefik)
+#=============================================================================
+nginx-ingress:
+  enabled: false  # Using Traefik instead
+
+#=============================================================================
+# CERT-MANAGER (for TLS certificates)
+#=============================================================================
+certmanager:
+  install: false  # Install separately if needed
+  rbac:
+    create: false
+
+#=============================================================================
+# PROMETHEUS (GitLab metrics)
+#=============================================================================
+prometheus:
+  install: false  # Will deploy dedicated monitoring stack in Phase 7
+
+#=============================================================================
+# GITLAB RUNNER
+#=============================================================================
+# Runner deployed separately - see runner/runner-values.yaml
+gitlab-runner:
+  install: false
+
+#=============================================================================
+# SHARED SETTINGS
+#=============================================================================
+shared-secrets:
+  enabled: true
+  rbac:
+    create: true
+
+#=============================================================================
+# RESOURCE SUMMARY (for reference)
+#=============================================================================
+# Estimated total resource usage:
+#
+# CPU Requests: ~2.5 cores
+# CPU Limits: ~8 cores
+# Memory Requests: ~6.5 GB
+# Memory Limits: ~12 GB
+#
+# Storage PVCs:
+# - PostgreSQL: 10Gi
+# - Redis: 5Gi
+# - Gitaly (repos): 50Gi
+# - MinIO (objects): 50Gi
+# Total: ~115Gi
+#
+# Cluster capacity: 72GB RAM, 20 vCPUs - sufficient for GitLab + workloads

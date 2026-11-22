@@ -1,0 +1,28 @@
+# Traefik ServiceMonitor - Prometheus Metrics Collection
+# Monitors Traefik ingress controller metrics
+# Requires: Traefik metrics endpoint enabled (default port 9100)
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: traefik-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/part-of: observability
+    release: kube-prometheus-stack
+spec:
+  # Traefik is typically deployed in kube-system or its own namespace
+  namespaceSelector:
+    matchNames:
+      - kube-system
+      - traefik
+  # Match Traefik service
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+      scrapeTimeout: 10s

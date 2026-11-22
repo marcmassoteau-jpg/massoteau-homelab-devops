@@ -59,8 +59,64 @@ docs/articles/MEDIUM-URLS.md
 # Cluster backup snapshots (contain infrastructure details)
 docs/testing/pre-testing-backups/*.yaml
 
-# Old demo files (capital K at root only)
-/Kubernetes/
+# Publish only the reviewed Medium series companion files.
+!/Kubernetes/
+/Kubernetes/*
+!/Kubernetes/manifests/
+/Kubernetes/manifests/*
+!/Kubernetes/manifests/argocd/
+/Kubernetes/manifests/argocd/*
+!/Kubernetes/manifests/cluster-autoscaler/
+/Kubernetes/manifests/cluster-autoscaler/*
+!/Kubernetes/manifests/cluster-autoscaler/hpa-examples/
+/Kubernetes/manifests/cluster-autoscaler/hpa-examples/*
+!/Kubernetes/manifests/gitlab/
+/Kubernetes/manifests/gitlab/*
+!/Kubernetes/manifests/gitlab/runner/
+/Kubernetes/manifests/gitlab/runner/*
+!/Kubernetes/manifests/gitlab/scripts/
+/Kubernetes/manifests/gitlab/scripts/*
+!/Kubernetes/manifests/monitoring/
+/Kubernetes/manifests/monitoring/*
+!/Kubernetes/manifests/monitoring/alerting/
+/Kubernetes/manifests/monitoring/alerting/*
+!/Kubernetes/manifests/monitoring/dashboards/
+/Kubernetes/manifests/monitoring/dashboards/*
+!/Kubernetes/manifests/monitoring/servicemonitors/
+/Kubernetes/manifests/monitoring/servicemonitors/*
+!/Kubernetes/manifests/velero/
+/Kubernetes/manifests/velero/*
+!/Kubernetes/manifests/velero/backup-schedules/
+/Kubernetes/manifests/velero/backup-schedules/*
+!/Kubernetes/manifests/velero/restore-examples/
+/Kubernetes/manifests/velero/restore-examples/*
+!/Kubernetes/manifests/README.md
+!/Kubernetes/manifests/argocd/argocd-ingress.yaml
+!/Kubernetes/manifests/argocd/argocd-values.yaml
+!/Kubernetes/manifests/cluster-autoscaler/hpa-examples/webapp-hpa.yaml
+!/Kubernetes/manifests/cluster-autoscaler/metrics-server-values.yaml
+!/Kubernetes/manifests/cluster-autoscaler/servicemonitor.yaml
+!/Kubernetes/manifests/gitlab/gitlab-ingressroute.yaml
+!/Kubernetes/manifests/gitlab/gitlab-namespace.yaml
+!/Kubernetes/manifests/gitlab/gitlab-values.yaml
+!/Kubernetes/manifests/gitlab/runner/runner-rbac.yaml
+!/Kubernetes/manifests/gitlab/runner/runner-values.yaml
+!/Kubernetes/manifests/gitlab/scripts/deploy-gitlab.sh
+!/Kubernetes/manifests/monitoring/alerting/application-alerts.yaml
+!/Kubernetes/manifests/monitoring/alerting/cluster-alerts.yaml
+!/Kubernetes/manifests/monitoring/dashboards/cluster-overview.json
+!/Kubernetes/manifests/monitoring/dashboards/homelab-services.json
+!/Kubernetes/manifests/monitoring/kube-prometheus-stack-values.yaml
+!/Kubernetes/manifests/monitoring/loki-values.yaml
+!/Kubernetes/manifests/monitoring/servicemonitors/argocd-servicemonitor.yaml
+!/Kubernetes/manifests/monitoring/servicemonitors/gitlab-servicemonitor.yaml
+!/Kubernetes/manifests/monitoring/servicemonitors/jenkins-servicemonitor.yaml
+!/Kubernetes/manifests/monitoring/servicemonitors/traefik-servicemonitor.yaml
+!/Kubernetes/manifests/velero/backup-schedules/full-cluster-backup.yaml
+!/Kubernetes/manifests/velero/backup-schedules/namespaced-backup.yaml
+!/Kubernetes/manifests/velero/restore-examples/namespace-restore.yaml
+!/Kubernetes/manifests/velero/restore-examples/resource-restore.yaml
+!/Kubernetes/manifests/velero/velero-values.yaml
 
 # Claude Code artifacts
 .claude/

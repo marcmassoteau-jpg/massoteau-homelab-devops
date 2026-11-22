@@ -1,0 +1,98 @@
+---
+# Traefik IngressRoute for GitLab Web UI
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gitlab-web
+  namespace: gitlab
+  labels:
+    app: gitlab
+    component: webservice
+spec:
+  entryPoints:
+    - web  # HTTP on port 30080 (NodePort)
+  routes:
+    - match: Host(`gitlab.homelab.local`)
+      kind: Rule
+      services:
+        - name: gitlab-webservice-default
+          port: 8181
+
+---
+# Traefik IngressRoute for GitLab Container Registry
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gitlab-registry
+  namespace: gitlab
+  labels:
+    app: gitlab
+    component: registry
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`registry.gitlab.homelab.local`)
+      kind: Rule
+      services:
+        - name: gitlab-registry
+          port: 5000
+
+---
+# Traefik IngressRoute for MinIO Console (optional)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gitlab-minio
+  namespace: gitlab
+  labels:
+    app: gitlab
+    component: minio
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`minio.gitlab.homelab.local`)
+      kind: Rule
+      services:
+        - name: gitlab-minio-svc
+          port: 9000
+
+---
+# HTTPS routes (when TLS is enabled with cert-manager)
+# Uncomment and configure these after setting up cert-manager
+#
+# apiVersion: traefik.io/v1alpha1
+# kind: IngressRoute
+# metadata:
+#   name: gitlab-web-tls
+#   namespace: gitlab
+# spec:
+#   entryPoints:
+#     - websecure  # HTTPS on port 30443 (NodePort)
+#   routes:
+#     - match: Host(`gitlab.homelab.local`)
+#       kind: Rule
+#       services:
+#         - name: gitlab-webservice-default
+#           port: 8181
+#   tls:
+#     secretName: gitlab-tls-cert
+#
+# ---
+# apiVersion: traefik.io/v1alpha1
+# kind: IngressRoute
+# metadata:
+#   name: gitlab-registry-tls
+#   namespace: gitlab
+# spec:
+#   entryPoints:
+#     - websecure
+#   routes:
+#     - match: Host(`registry.gitlab.homelab.local`)
+#       kind: Rule
+#       services:
+#         - name: gitlab-registry
+#           port: 5000
+#   tls:
+#     secretName: gitlab-registry-tls-cert

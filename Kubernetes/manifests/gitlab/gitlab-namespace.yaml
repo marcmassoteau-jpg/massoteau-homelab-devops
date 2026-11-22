@@ -1,0 +1,45 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitlab
+  labels:
+    name: gitlab
+    app.kubernetes.io/name: gitlab
+    app.kubernetes.io/component: git-server
+    app.kubernetes.io/part-of: devops-platform
+    environment: homelab
+  annotations:
+    description: "GitLab self-hosted Git server and CI/CD platform"
+    phase: "4"
+    article: "13-14"
+---
+# Optional: ResourceQuota to prevent runaway resource consumption
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gitlab-quota
+  namespace: gitlab
+spec:
+  hard:
+    requests.cpu: "10"
+    requests.memory: "20Gi"
+    limits.cpu: "20"
+    limits.memory: "40Gi"
+    persistentvolumeclaims: "10"
+---
+# Optional: LimitRange for default resource limits
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: gitlab-limits
+  namespace: gitlab
+spec:
+  limits:
+  - default:
+      cpu: "1"
+      memory: "1Gi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    type: Container

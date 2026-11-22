@@ -1,0 +1,101 @@
+# Cluster Alert Rules - PrometheusRule for Homelab Cluster Health
+# Monitors node health, resource usage, and pod stability
+# Requires: kube-prometheus-stack with ruleSelectorNilUsesHelmValues: false
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: cluster-alerts
+    app.kubernetes.io/part-of: observability
+    release: kube-prometheus-stack
+spec:
+  groups:
+    #=========================================================================
+    # NODE HEALTH RULES
+    #=========================================================================
+    - name: cluster.node.rules
+      rules:
+        # Alert when a node is unreachable for more than 5 minutes
+        - alert: NodeDown
+          expr: up{job="node-exporter"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node {{ $labels.instance }} is down"
+            description: "Node exporter on {{ $labels.instance }} has been unreachable for more than 5 minutes."
+            runbook_url: "https://homelab.local/runbooks/node-down"
+
+        # Alert when node CPU usage exceeds 85% for 5 minutes
+        - alert: HighCPUUsage
+          expr: |
+            100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage on {{ $labels.instance }}"
+            description: "CPU usage on {{ $labels.instance }} has been above 85% for more than 5 minutes. Current value: {{ $value | printf \"%.1f\" }}%"
+
+        # Alert when node memory usage exceeds 90% for 5 minutes
+        - alert: HighMemoryUsage
+          expr: |
+            (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage on {{ $labels.instance }}"
+            description: "Memory usage on {{ $labels.instance }} has been above 90% for more than 5 minutes. Current value: {{ $value | printf \"%.1f\" }}%"
+
+        # Alert when node disk usage exceeds 85%
+        - alert: DiskPressure
+          expr: |
+            (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disk pressure on {{ $labels.instance }}"
+            description: "Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }} is {{ $value | printf \"%.1f\" }}% full."
+
+    #=========================================================================
+    # POD HEALTH RULES
+    #=========================================================================
+    - name: cluster.pod.rules
+      rules:
+        # Alert when a pod is crash looping (more than 3 restarts in 15 minutes)
+        - alert: PodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total[15m]) > 3
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+            description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has restarted {{ $value | printf \"%.0f\" }} times in the last 15 minutes."
+
+        # Alert when a pod is not ready for more than 5 minutes
+        - alert: PodNotReady
+          expr: |
+            kube_pod_status_ready{condition="true"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is not ready"
+            description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been in a non-ready state for more than 5 minutes."
+
+        # Alert when a container is in waiting state
+        - alert: ContainerWaiting
+          expr: |
+            kube_pod_container_status_waiting_reason{reason!="ContainerCreating"} > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} is waiting"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has been in waiting state ({{ $labels.reason }}) for more than 10 minutes."

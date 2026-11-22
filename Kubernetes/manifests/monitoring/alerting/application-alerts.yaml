@@ -1,0 +1,93 @@
+# Application Alert Rules - PrometheusRule for Homelab Service Health
+# Monitors GitLab, Jenkins, ArgoCD, and deployment health
+# Requires: kube-prometheus-stack with ruleSelectorNilUsesHelmValues: false
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: application-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: application-alerts
+    app.kubernetes.io/part-of: observability
+    release: kube-prometheus-stack
+spec:
+  groups:
+    #=========================================================================
+    # APPLICATION HEALTH RULES
+    #=========================================================================
+    - name: application.health.rules
+      rules:
+        # Alert when GitLab is down
+        - alert: GitLabDown
+          expr: |
+            absent(up{job="gitlab-metrics"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+            service: gitlab
+          annotations:
+            summary: "GitLab is down"
+            description: "GitLab metrics endpoint has been unreachable for more than 5 minutes. Check the gitlab namespace for pod issues."
+
+        # Alert when Jenkins is down
+        - alert: JenkinsDown
+          expr: |
+            absent(up{job="jenkins-metrics"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+            service: jenkins
+          annotations:
+            summary: "Jenkins is down"
+            description: "Jenkins metrics endpoint has been unreachable for more than 5 minutes. Check the jenkins namespace for pod issues."
+
+        # Alert when ArgoCD server is down
+        - alert: ArgoCDDown
+          expr: |
+            absent(up{job="argocd-server-metrics"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+            service: argocd
+          annotations:
+            summary: "ArgoCD is down"
+            description: "ArgoCD server metrics endpoint has been unreachable for more than 5 minutes. Check the argocd namespace for pod issues."
+
+    #=========================================================================
+    # DEPLOYMENT HEALTH RULES
+    #=========================================================================
+    - name: application.deployment.rules
+      rules:
+        # Alert when deployment replicas do not match desired count
+        - alert: DeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas != kube_deployment_status_ready_replicas
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} replica mismatch"
+            description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has {{ $value }} ready replicas but expects {{ printf `kube_deployment_spec_replicas{namespace=\"%s\",deployment=\"%s\"}` $labels.namespace $labels.deployment | query | first | value }} replicas."
+
+        # Alert when HPA is running at maximum capacity
+        - alert: HPAMaxedOut
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas == kube_horizontalpodautoscaler_spec_max_replicas
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "HPA {{ $labels.namespace }}/{{ $labels.horizontalpodautoscaler }} is maxed out"
+            description: "HPA {{ $labels.horizontalpodautoscaler }} in namespace {{ $labels.namespace }} has been running at maximum replicas ({{ $value }}) for more than 15 minutes."
+
+        # Alert when a deployment has no available replicas
+        - alert: DeploymentUnavailable
+          expr: |
+            kube_deployment_status_available_replicas == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has no available replicas"
+            description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has had 0 available replicas for more than 5 minutes."

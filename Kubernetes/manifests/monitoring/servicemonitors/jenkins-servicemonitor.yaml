@@ -1,0 +1,29 @@
+# Jenkins ServiceMonitor - Prometheus Metrics Collection
+# Monitors Jenkins metrics via the Prometheus plugin
+# Requires: Jenkins prometheus plugin (2.3.1) and kube-prometheus-stack
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jenkins-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: jenkins
+    app.kubernetes.io/part-of: observability
+    release: kube-prometheus-stack
+spec:
+  # Select services in the jenkins namespace
+  namespaceSelector:
+    matchNames:
+      - jenkins
+  # Match Jenkins service
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: jenkins
+      app.kubernetes.io/component: jenkins-controller
+  endpoints:
+    # Jenkins Prometheus plugin endpoint
+    - port: http
+      interval: 30s
+      path: /prometheus
+      scrapeTimeout: 10s

@@ -1,0 +1,33 @@
+# GitLab ServiceMonitor - Prometheus Metrics Collection
+# Monitors GitLab metrics endpoint for the homelab deployment
+# Requires: kube-prometheus-stack with serviceMonitorSelectorNilUsesHelmValues: false
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gitlab-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: gitlab
+    app.kubernetes.io/part-of: observability
+    release: kube-prometheus-stack
+spec:
+  # Select services in the gitlab namespace
+  namespaceSelector:
+    matchNames:
+      - gitlab
+  # Match GitLab services exposing metrics
+  selector:
+    matchLabels:
+      app: gitlab
+  endpoints:
+    # GitLab Workhorse/Webservice metrics
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scrapeTimeout: 10s
+    # GitLab Sidekiq metrics (if available)
+    - port: http-sidekiq
+      interval: 30s
+      path: /metrics
+      scrapeTimeout: 10s

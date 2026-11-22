@@ -1,0 +1,56 @@
+---
+# Example: Restore Specific Resources from Backup
+#
+# This Velero Restore CR demonstrates how to restore only specific resource
+# types from a backup. Useful when you need to recover configurations
+# (ConfigMaps, Secrets) or application definitions (Deployments) without
+# restoring everything.
+#
+# Usage:
+#   1. List available backups:
+#      velero backup get
+#
+#   2. Inspect backup contents to find available resources:
+#      velero backup describe <backup-name> --details
+#
+#   3. Apply this manifest (after updating backup name and resources):
+#      kubectl apply -f resource-restore.yaml
+#
+#   4. Monitor restore progress:
+#      velero restore get
+#      velero restore describe restore-resources-YYYYMMDD
+#
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: restore-resources-YYYYMMDD
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: velero
+    app.kubernetes.io/component: restore
+    restore-type: selective
+spec:
+  # Name of the backup to restore from
+  backupName: full-cluster-daily-YYYYMMDD
+
+  # Only restore from specific namespaces
+  includedNamespaces:
+    - gitlab
+
+  # Only restore specific resource types
+  includedResources:
+    - deployments
+    - configmaps
+    - secrets
+
+  # Do not restore persistent volume data (only resource definitions)
+  restorePVs: false
+
+  # Label selector to further filter resources (optional)
+  # Uncomment to only restore resources matching specific labels
+  # labelSelector:
+  #   matchLabels:
+  #     app: my-application
+
+  # What to do with existing resources in the cluster
+  existingResourcePolicy: none

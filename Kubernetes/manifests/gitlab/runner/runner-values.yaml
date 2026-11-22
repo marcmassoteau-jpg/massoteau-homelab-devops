@@ -1,0 +1,339 @@
+# GitLab Runner Helm Chart Values - Homelab Optimized Configuration
+# Compatible with GitLab Runner Helm Chart v0.60.0+
+# Designed for Kubernetes executor with pod-based job execution
+#
+# Prerequisites:
+#   - GitLab instance deployed and accessible
+#   - Runner registration token from GitLab (Admin Area > CI/CD > Runners)
+#
+# Deployment:
+#   helm install gitlab-runner gitlab/gitlab-runner \
+#     -f runner-values.yaml -n gitlab-runner --create-namespace
+#
+# IMPORTANT: Replace <REGISTRATION_TOKEN> with your actual token before deploying!
+
+#=============================================================================
+# RUNNER CONFIGURATION
+#=============================================================================
+
+# GitLab instance URL (internal service name, not external URL)
+# Use internal cluster DNS for faster communication
+gitlabUrl: http://gitlab-webservice-default.gitlab.svc.cluster.local:8181/
+
+# Runner registration token
+# Get from GitLab UI: Admin Area > CI/CD > Runners > "Register an instance runner"
+# REQUIRED: Replace this placeholder with your actual token
+runnerRegistrationToken: "<REGISTRATION_TOKEN>"
+
+# Alternatively, use existing secret (more secure)
+# runners:
+#   secret: gitlab-runner-secret
+
+# Unregister runners on pod termination (clean shutdown)
+unregisterRunners: true
+
+# Concurrent jobs this runner can execute
+# Adjust based on cluster capacity
+# Each job spawns a new pod with defined resource limits
+concurrent: 4
+
+# Check for new jobs interval (seconds)
+checkInterval: 30
+
+# Runner log level (debug, info, warn, error, fatal, panic)
+logLevel: info
+
+#=============================================================================
+# RBAC CONFIGURATION
+#=============================================================================
+rbac:
+  create: true
+  rules:
+    # Permissions for runner to manage job pods
+    - apiGroups: [""]
+      resources: ["pods", "pods/exec", "pods/attach", "pods/log"]
+      verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+    - apiGroups: [""]
+      resources: ["services"]
+      verbs: ["get", "list", "create", "delete"]
+    - apiGroups: [""]
+      resources: ["secrets"]
+      verbs: ["get", "list", "create", "delete", "update"]
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "list", "create", "delete", "update"]
+
+  # Additional cluster-wide permissions (optional)
+  # Uncomment if jobs need to deploy to other namespaces
+  # clusterWideAccess: true
+
+#=============================================================================
+# RUNNER POD CONFIGURATION
+#=============================================================================
+
+# Runner manager pod resources
+# The manager coordinates jobs but doesn't execute them
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Node selector (optional - pin runner to specific nodes)
+# nodeSelector:
+#   role: ci-cd
+
+# Tolerations (optional - allow scheduling on tainted nodes)
+# tolerations: []
+
+# Affinity rules (optional)
+# affinity: {}
+
+#=============================================================================
+# KUBERNETES EXECUTOR CONFIGURATION
+#=============================================================================
+
+runners:
+  # Executor type: kubernetes (spawns pods for each job)
+  executor: kubernetes
+
+  # Runner configuration template
+  config: |
+    [[runners]]
+      [runners.kubernetes]
+        # Namespace for job pods
+        namespace = "gitlab-runner"
+
+        # Default container image if not specified in .gitlab-ci.yml
+        image = "alpine:latest"
+
+        # Privileged mode (DISABLED for security)
+        # Enable only if jobs require Docker-in-Docker or special permissions
+        privileged = false
+
+        # Service account for job pods
+        service_account = "gitlab-runner"
+
+        # CPU resources for job pods (per job)
+        cpu_request = "100m"
+        cpu_limit = "1"
+
+        # Memory resources for job pods (per job)
+        memory_request = "128Mi"
+        memory_limit = "512Mi"
+
+        # Helper container resources (used for Git clone, artifact upload)
+        helper_cpu_request = "50m"
+        helper_cpu_limit = "200m"
+        helper_memory_request = "64Mi"
+        helper_memory_limit = "128Mi"
+
+        # Pod labels (for identification and monitoring)
+        [runners.kubernetes.pod_labels]
+          "app.kubernetes.io/managed-by" = "gitlab-runner"
+          "gitlab.com/runner" = "true"
+
+        # Pod annotations (optional metadata)
+        [runners.kubernetes.pod_annotations]
+          "description" = "GitLab CI/CD job pod"
+
+        # Pull policy for images
+        pull_policy = ["if-not-present", "always"]
+
+        # Node selector for job pods (optional)
+        # [runners.kubernetes.node_selector]
+        #   "role" = "ci-cd"
+
+        # Pod security context
+        [runners.kubernetes.pod_security_context]
+          fs_group = 65534
+          run_as_non_root = true
+          run_as_user = 65534
+
+        # DNS configuration
+        [runners.kubernetes.dns_config]
+
+        # Volumes for job pods (optional)
+        # Example: mount Docker socket for Docker builds (INSECURE - use Kaniko instead)
+        # [[runners.kubernetes.volumes.host_path]]
+        #   name = "docker-socket"
+        #   mount_path = "/var/run/docker.sock"
+        #   host_path = "/var/run/docker.sock"
+
+        # Empty dir volumes (for temporary storage during job)
+        [[runners.kubernetes.volumes.empty_dir]]
+          name = "build-cache"
+          mount_path = "/cache"
+          medium = "Memory"
+
+  # Runner name (appears in GitLab UI)
+  name: "kubernetes-homelab-runner"
+
+  # Tags for this runner (jobs with matching tags will use this runner)
+  # Example: tags = "kubernetes,docker,homelab"
+  tags: "kubernetes,docker,homelab"
+
+  # Run untagged jobs (jobs without tags)
+  runUntagged: true
+
+  # Protect runner (only run jobs on protected branches)
+  protected: false
+
+  # Lock runner to specific project (false = shared runner)
+  locked: false
+
+  # Maximum job timeout (seconds)
+  # Prevents runaway jobs from consuming resources forever
+  maximumTimeout: 3600  # 1 hour
+
+  # Poll interval for new jobs
+  pollInterval: 30
+
+  # Output limit (bytes)
+  outputLimit: 4096
+
+#=============================================================================
+# CACHE CONFIGURATION
+#=============================================================================
+
+# GitLab Runner cache (for dependencies, build artifacts)
+# Options: s3, gcs, azure, local
+# We'll use GitLab's integrated object storage (MinIO)
+
+# Cache with MinIO (via S3 API)
+# Note: Requires configuring MinIO credentials
+# For simplicity, we're disabling cache initially
+# Enable this after setting up MinIO access
+
+# runners:
+#   cache:
+#     Type: s3
+#     Shared: true
+#     s3ServerAddress: gitlab-minio-svc.gitlab.svc.cluster.local:9000
+#     s3BucketName: runner-cache
+#     s3BucketLocation: us-east-1
+#     s3CacheInsecure: true
+
+#=============================================================================
+# METRICS AND MONITORING
+#=============================================================================
+
+# Prometheus metrics
+metrics:
+  enabled: true
+  port: 9252
+  # ServiceMonitor for Prometheus Operator (Phase 7)
+  serviceMonitor:
+    enabled: false  # Enable in Phase 7
+
+#=============================================================================
+# SECURITY
+#=============================================================================
+
+# Pod security context for runner manager
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 100
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 100
+  capabilities:
+    drop: ["ALL"]
+
+#=============================================================================
+# SESSION SERVER (for interactive debugging)
+#=============================================================================
+
+# Session server allows SSH/exec into running job pods for debugging
+sessionServer:
+  enabled: false  # Enable if needed for debugging
+
+#=============================================================================
+# ADDITIONAL SETTINGS
+#=============================================================================
+
+# Image pull secrets (if using private registries)
+# imagePullSecrets: []
+
+# Service account override (uses created service account by default)
+# serviceAccountName: gitlab-runner
+
+# Shutdown grace period (seconds)
+terminationGracePeriodSeconds: 30
+
+# Replicas (number of runner manager pods)
+# Typically 1 is sufficient; scale for high availability
+replicas: 1
+
+# Strategy for pod updates
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+#=============================================================================
+# RESOURCE SUMMARY (for reference)
+#=============================================================================
+#
+# Runner Manager Pod:
+#   CPU request: 100m
+#   CPU limit: 500m
+#   Memory request: 128Mi
+#   Memory limit: 512Mi
+#
+# Per CI/CD Job Pod:
+#   CPU request: 100m
+#   CPU limit: 1
+#   Memory request: 128Mi
+#   Memory limit: 512Mi
+#
+# Max Concurrent Jobs: 4
+#   Total max CPU: 4 cores
+#   Total max memory: 2Gi
+#
+# With 72GB cluster capacity, runner impact is minimal (~3-5% under full load)
+#
+#=============================================================================
+
+#=============================================================================
+# DEPLOYMENT NOTES
+#=============================================================================
+#
+# 1. Get registration token from GitLab:
+#    GitLab UI > Admin Area > CI/CD > Runners > "Register an instance runner"
+#
+# 2. Replace <REGISTRATION_TOKEN> in this file with actual token
+#
+# 3. Deploy runner:
+#    helm install gitlab-runner gitlab/gitlab-runner \
+#      -f runner-values.yaml -n gitlab-runner --create-namespace
+#
+# 4. Verify runner registered:
+#    GitLab UI > Admin Area > CI/CD > Runners
+#    Should show runner with green "online" indicator
+#
+# 5. Test with sample pipeline:
+#    Create .gitlab-ci.yml in a project:
+#    ---
+#    test:
+#      script:
+#        - echo "Hello from GitLab Runner!"
+#
+# 6. Monitor jobs:
+#    kubectl get pods -n gitlab-runner -w
+#    (Watch pods spawn for each job)
+#
+#=============================================================================

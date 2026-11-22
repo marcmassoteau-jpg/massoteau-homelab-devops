@@ -1,0 +1,102 @@
+# HPA Example: Webapp with Horizontal Pod Autoscaler
+# Demonstrates autoscaling based on CPU utilization
+#
+# Apply: kubectl apply -f webapp-hpa.yaml
+# Test: kubectl run stress --image=busybox -- sh -c "while true; do wget -q -O- http://webapp-example; done"
+
+#=============================================================================
+# DEPLOYMENT
+#=============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp-example
+  namespace: default
+  labels:
+    app: webapp-example
+    purpose: hpa-demo
+    app.kubernetes.io/part-of: autoscaler-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webapp-example
+  template:
+    metadata:
+      labels:
+        app: webapp-example
+        purpose: hpa-demo
+    spec:
+      containers:
+        - name: webapp
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+
+#=============================================================================
+# SERVICE
+#=============================================================================
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp-example
+  namespace: default
+  labels:
+    app: webapp-example
+    purpose: hpa-demo
+spec:
+  selector:
+    app: webapp-example
+  ports:
+    - port: 80
+      targetPort: 80
+
+#=============================================================================
+# HORIZONTAL POD AUTOSCALER
+#=============================================================================
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: webapp-example-hpa
+  namespace: default
+  labels:
+    app: webapp-example
+    purpose: hpa-demo
+    app.kubernetes.io/part-of: autoscaler-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: webapp-example
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

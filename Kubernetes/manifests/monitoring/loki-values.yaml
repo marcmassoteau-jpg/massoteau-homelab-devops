@@ -1,0 +1,124 @@
+# Loki Helm Values - Homelab Optimized Configuration
+# Compatible with Grafana Loki Helm Chart v6.22.x (grafana/loki)
+# Designed for local Kubernetes cluster with limited resources
+# Uses SingleBinary mode for simplicity in homelab environments
+#
+# Deployment: helm install loki grafana/loki -f loki-values.yaml -n monitoring --create-namespace
+# Upgrade: helm upgrade loki grafana/loki -f loki-values.yaml -n monitoring
+
+#=============================================================================
+# DEPLOYMENT MODE
+#=============================================================================
+# SingleBinary mode - all Loki components in one process
+# Ideal for homelab with low to moderate log volume
+deploymentMode: SingleBinary
+
+#=============================================================================
+# LOKI CONFIGURATION
+#=============================================================================
+loki:
+  # Disable multi-tenancy for homelab simplicity
+  auth_enabled: false
+
+  commonConfig:
+    # Single replica - no replication needed
+    replication_factor: 1
+
+  # Storage configuration - local filesystem
+  storage:
+    type: filesystem
+
+  # Schema configuration
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  # Retention and limits
+  limits_config:
+    # Keep logs for 7 days
+    retention_period: 168h
+    # Ingestion limits suitable for homelab
+    ingestion_rate_mb: 4
+    ingestion_burst_size_mb: 6
+    max_streams_per_user: 5000
+    max_entries_limit_per_query: 5000
+
+  # Compactor handles retention enforcement
+  compactor:
+    retention_enabled: true
+    working_directory: /var/loki/compactor
+    delete_request_store: filesystem
+
+#=============================================================================
+# SINGLE BINARY
+#=============================================================================
+singleBinary:
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Persistent storage for log data
+  persistence:
+    enabled: true
+    size: 10Gi
+
+#=============================================================================
+# GATEWAY
+#=============================================================================
+# Disable gateway - not needed in SingleBinary mode
+gateway:
+  enabled: false
+
+#=============================================================================
+# DISTRIBUTED COMPONENTS (disabled for SingleBinary)
+#=============================================================================
+# All set to 0 since we use SingleBinary mode
+backend:
+  replicas: 0
+
+read:
+  replicas: 0
+
+write:
+  replicas: 0
+
+#=============================================================================
+# TESTING
+#=============================================================================
+test:
+  enabled: false
+
+#=============================================================================
+# MONITORING
+#=============================================================================
+monitoring:
+  # Disable self-monitoring for homelab simplicity
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+
+  # Loki canary disabled
+  lokiCanary:
+    enabled: false
+
+#=============================================================================
+# CHUNK CACHE
+#=============================================================================
+chunksCache:
+  enabled: false
+
+resultsCache:
+  enabled: false

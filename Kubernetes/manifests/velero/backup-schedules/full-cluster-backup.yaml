@@ -1,0 +1,33 @@
+---
+# Full Cluster Backup Schedule
+# Backs up all namespaces except system namespaces daily at 2:00 AM UTC
+# Retention: 30 days (720 hours)
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: full-cluster-daily
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: velero
+    app.kubernetes.io/component: backup-schedule
+    backup-type: full-cluster
+spec:
+  schedule: "0 2 * * *"
+  useOwnerReferencesInBackup: false
+  template:
+    ttl: 720h0m0s
+    includedNamespaces:
+      - "*"
+    excludedNamespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: false
+    defaultVolumesToFsBackup: true
+    metadata:
+      labels:
+        backup-type: full-cluster
+        schedule: daily

@@ -172,6 +172,8 @@ This project is documented in a 22-article [Medium series](https://medium.com/@m
 | **8: Operations** | 19-21 | Disaster recovery, troubleshooting, production readiness |
 | **9: Autoscaling** | 22 | Custom Proxmox-based cluster autoscaler |
 
+The [Kubernetes manifest index](Kubernetes/manifests/README.md) links to the Helm values and manifests used in Articles 13, 14, 17, 18, 19, and 22.
+
 ## Project Structure
 
 ```

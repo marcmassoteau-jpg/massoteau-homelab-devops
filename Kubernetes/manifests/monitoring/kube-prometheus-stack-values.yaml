@@ -1,0 +1,199 @@
+# Kube-Prometheus-Stack Helm Values - Homelab Optimized Configuration
+# Compatible with kube-prometheus-stack chart v65.x (prometheus-community)
+# Designed for local Kubernetes cluster with limited resources
+#
+# Deployment: helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack -f kube-prometheus-stack-values.yaml -n monitoring --create-namespace
+# Upgrade: helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack -f kube-prometheus-stack-values.yaml -n monitoring
+
+#=============================================================================
+# PROMETHEUS
+#=============================================================================
+prometheus:
+  prometheusSpec:
+    # Single replica for homelab
+    replicas: 1
+
+    # Data retention - 15 days balances storage and history
+    retention: 15d
+
+    # Resource limits - optimized for homelab
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+    # Persistent storage for metrics data
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+    # Discover all ServiceMonitors/PodMonitors/PrometheusRules regardless of labels
+    # This ensures monitors created outside the Helm release are picked up
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    # Scrape interval and evaluation interval
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+
+#=============================================================================
+# GRAFANA
+#=============================================================================
+grafana:
+  enabled: true
+
+  # Single replica for homelab
+  replicas: 1
+
+  # Resource limits - optimized for homelab
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Ingress configuration for Traefik
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: web
+    hosts:
+      - grafana.homelab.local
+    tls: []  # TLS handled by Traefik if needed
+
+  # Persistent storage for Grafana data (dashboards, preferences)
+  persistence:
+    enabled: true
+    size: 5Gi
+
+  # Additional Grafana plugins
+  plugins:
+    - grafana-piechart-panel
+
+  # Sidecar for auto-discovery of dashboards and datasources
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      # Search all namespaces for ConfigMaps with dashboards
+      searchNamespace: ALL
+    datasources:
+      enabled: true
+
+  # Grafana configuration overrides
+  grafana.ini:
+    server:
+      root_url: "http://grafana.homelab.local"
+    auth.anonymous:
+      enabled: false
+
+#=============================================================================
+# ALERTMANAGER
+#=============================================================================
+alertmanager:
+  alertmanagerSpec:
+    # Single replica for homelab
+    replicas: 1
+
+    # Resource limits - optimized for homelab
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  # Alertmanager routing configuration
+  config:
+    global:
+      resolve_timeout: 5m
+
+    # Route tree for alert routing
+    route:
+      group_by: ['alertname', 'namespace']
+      group_wait: 10s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: 'default'
+
+    # Receivers - configure webhook, email, or slack as needed
+    receivers:
+      - name: 'default'
+        # Add webhook, email, or slack configuration here
+        # Example webhook:
+        # webhook_configs:
+        #   - url: 'http://alertmanager-webhook:9095/alerts'
+      - name: 'null'
+        # Null receiver - silences Watchdog alerts
+
+    # Inhibit rules - suppress lower-severity alerts when critical fires
+    inhibit_rules:
+      - source_matchers:
+          - severity = "critical"
+        target_matchers:
+          - severity = "warning"
+        equal: ['alertname', 'namespace']
+
+#=============================================================================
+# NODE EXPORTER
+#=============================================================================
+nodeExporter:
+  enabled: true
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 30Mi
+    limits:
+      cpu: 200m
+      memory: 50Mi
+
+#=============================================================================
+# KUBE STATE METRICS
+#=============================================================================
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+#=============================================================================
+# PROMETHEUS OPERATOR
+#=============================================================================
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+#=============================================================================
+# ADDITIONAL SCRAPE CONFIGS
+#=============================================================================
+# Additional scrape configs for targets not using ServiceMonitor
+# prometheus:
+#   prometheusSpec:
+#     additionalScrapeConfigs:
+#       - job_name: 'custom-target'
+#         static_configs:
+#           - targets: ['custom-service.default.svc:9090']

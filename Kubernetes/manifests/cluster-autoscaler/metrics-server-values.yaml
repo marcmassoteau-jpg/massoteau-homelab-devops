@@ -1,0 +1,74 @@
+# Metrics Server Helm Chart Values - Homelab Configuration
+# Compatible with metrics-server Helm Chart v3.x
+# Required for HPA and cluster autoscaler node metrics
+#
+# Deployment: helm install metrics-server metrics-server/metrics-server -f metrics-server-values.yaml -n kube-system
+# Upgrade: helm upgrade metrics-server metrics-server/metrics-server -f metrics-server-values.yaml -n kube-system
+
+#=============================================================================
+# GENERAL CONFIGURATION
+#=============================================================================
+
+# Replica count - single instance for homelab
+replicas: 1
+
+#=============================================================================
+# CONTAINER ARGUMENTS
+#=============================================================================
+
+# Args for the metrics-server container
+args:
+  # Allow insecure TLS for kubelet communication (common in homelab)
+  - --kubelet-insecure-tls
+  # Use InternalIP for kubelet communication
+  - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+  # Metric resolution interval
+  - --metric-resolution=30s
+
+#=============================================================================
+# RESOURCES
+#=============================================================================
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+#=============================================================================
+# SERVICE CONFIGURATION
+#=============================================================================
+
+service:
+  type: ClusterIP
+  port: 443
+
+#=============================================================================
+# PROBES
+#=============================================================================
+
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: https
+    scheme: HTTPS
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: https
+    scheme: HTTPS
+  periodSeconds: 10
+  failureThreshold: 3
+
+#=============================================================================
+# API SERVICE
+#=============================================================================
+
+apiService:
+  create: true
+  insecureSkipTLSVerify: true

@@ -1,0 +1,50 @@
+---
+# Example: Restore a Full Namespace from Backup
+#
+# This Velero Restore CR demonstrates how to restore an entire namespace
+# from a previously created backup. Replace YYYYMMDD with the actual
+# backup date or use the backup name from `velero backup get`.
+#
+# Usage:
+#   1. List available backups:
+#      velero backup get
+#      kubectl get backups.velero.io -n velero
+#
+#   2. Find the backup you want to restore from:
+#      velero backup describe gitlab-backup-YYYYMMDD
+#
+#   3. Apply this manifest (after updating backup name):
+#      kubectl apply -f namespace-restore.yaml
+#
+#   4. Monitor restore progress:
+#      velero restore get
+#      velero restore describe restore-gitlab-YYYYMMDD
+#      velero restore logs restore-gitlab-YYYYMMDD
+#
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: restore-gitlab-YYYYMMDD
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: velero
+    app.kubernetes.io/component: restore
+    restore-type: namespace
+spec:
+  # Name of the backup to restore from
+  backupName: gitlab-backup-YYYYMMDD
+
+  # Namespaces to include in the restore
+  includedNamespaces:
+    - gitlab
+
+  # Restore persistent volume data
+  restorePVs: true
+
+  # Preserve the node ports of existing services
+  preserveNodePorts: true
+
+  # What to do with existing resources in the cluster
+  # - none: do not restore if resource already exists (default)
+  # - update: overwrite existing resources with backup data
+  existingResourcePolicy: none

@@ -1,0 +1,231 @@
+---
+# GitLab Runner RBAC Configuration
+# Defines permissions for GitLab Runner to manage CI/CD job pods
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitlab-runner
+  labels:
+    name: gitlab-runner
+    app.kubernetes.io/name: gitlab-runner
+    app.kubernetes.io/component: ci-cd
+    app.kubernetes.io/part-of: gitlab
+    environment: homelab
+  annotations:
+    description: "GitLab Runner for CI/CD pipeline execution"
+    phase: "4"
+
+---
+# ServiceAccount for GitLab Runner manager
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab-runner
+  namespace: gitlab-runner
+  labels:
+    app: gitlab-runner
+
+---
+# Role: Permissions within gitlab-runner namespace
+# Runner needs to create/manage pods, secrets, configmaps for CI/CD jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitlab-runner
+  namespace: gitlab-runner
+rules:
+  # Pod management (create job pods, get logs, exec for debugging)
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/attach", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+
+  # Service management (for services needed by jobs)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete"]
+
+  # Secret management (for job credentials, registry auth)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "delete", "update"]
+
+  # ConfigMap management (for job configuration)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "delete", "update"]
+
+  # PersistentVolumeClaim (if jobs need persistent storage)
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
+
+---
+# RoleBinding: Bind Role to ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitlab-runner
+  namespace: gitlab-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gitlab-runner
+subjects:
+  - kind: ServiceAccount
+    name: gitlab-runner
+    namespace: gitlab-runner
+
+---
+# Optional: ClusterRole for cluster-wide access
+# Uncomment if CI/CD jobs need to deploy to other namespaces
+# or access cluster-level resources
+#
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRole
+# metadata:
+#   name: gitlab-runner-cluster
+# rules:
+#   # Read access to nodes (for node selection, affinity)
+#   - apiGroups: [""]
+#     resources: ["nodes"]
+#     verbs: ["get", "list"]
+#
+#   # Namespace management (create namespaces for deployments)
+#   - apiGroups: [""]
+#     resources: ["namespaces"]
+#     verbs: ["get", "list", "create"]
+#
+#   # Deployment to any namespace
+#   - apiGroups: ["apps"]
+#     resources: ["deployments", "statefulsets", "daemonsets"]
+#     verbs: ["get", "list", "create", "update", "patch", "delete"]
+#
+#   # Service management across namespaces
+#   - apiGroups: [""]
+#     resources: ["services"]
+#     verbs: ["get", "list", "create", "update", "patch", "delete"]
+#
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRoleBinding
+# metadata:
+#   name: gitlab-runner-cluster
+# roleRef:
+#   apiGroup: rbac.authorization.k8s.io
+#   kind: ClusterRole
+#   name: gitlab-runner-cluster
+# subjects:
+#   - kind: ServiceAccount
+#     name: gitlab-runner
+#     namespace: gitlab-runner
+
+---
+# ResourceQuota for gitlab-runner namespace
+# Prevents runaway CI/CD jobs from consuming all cluster resources
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gitlab-runner-quota
+  namespace: gitlab-runner
+spec:
+  hard:
+    # Limit total resource requests for all job pods
+    requests.cpu: "8"
+    requests.memory: "8Gi"
+
+    # Limit total resource limits
+    limits.cpu: "16"
+    limits.memory: "16Gi"
+
+    # Limit number of pods (concurrent jobs + runner pod)
+    pods: "20"
+
+    # Limit PVCs (if jobs create persistent volumes)
+    persistentvolumeclaims: "5"
+
+---
+# LimitRange: Default resource limits for pods without explicit limits
+# Prevents jobs without resource specifications from consuming unlimited resources
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: gitlab-runner-limits
+  namespace: gitlab-runner
+spec:
+  limits:
+    # Default limits for containers
+    - default:
+        cpu: "1"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      type: Container
+
+    # Pod-level limits (sum of all containers)
+    - max:
+        cpu: "4"
+        memory: "4Gi"
+      type: Pod
+
+---
+# NetworkPolicy: Restrict runner pod communication (optional security)
+# Allows runner to communicate with GitLab and job pods
+# Uncomment to enable network isolation
+#
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: gitlab-runner-netpol
+#   namespace: gitlab-runner
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: gitlab-runner
+#   policyTypes:
+#     - Ingress
+#     - Egress
+#   ingress:
+#     # Allow Prometheus to scrape metrics
+#     - from:
+#       - namespaceSelector:
+#           matchLabels:
+#             name: monitoring
+#       ports:
+#       - protocol: TCP
+#         port: 9252
+#   egress:
+#     # Allow DNS
+#     - to:
+#       - namespaceSelector:
+#           matchLabels:
+#             name: kube-system
+#       ports:
+#       - protocol: UDP
+#         port: 53
+#
+#     # Allow access to GitLab webservice
+#     - to:
+#       - namespaceSelector:
+#           matchLabels:
+#             name: gitlab
+#       ports:
+#       - protocol: TCP
+#         port: 8181
+#
+#     # Allow access to container registry
+#     - to:
+#       - namespaceSelector:
+#           matchLabels:
+#             name: gitlab
+#       ports:
+#       - protocol: TCP
+#         port: 5000
+#
+#     # Allow HTTPS to external registries (Docker Hub, etc.)
+#     - to:
+#       - podSelector: {}
+#       ports:
+#       - protocol: TCP
+#         port: 443

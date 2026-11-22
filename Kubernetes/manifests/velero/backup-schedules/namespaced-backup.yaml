@@ -1,0 +1,120 @@
+---
+# GitLab Backup Schedule
+# Backs up the gitlab namespace every 6 hours
+# Retention: 7 days (168 hours)
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: gitlab-backup
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: velero
+    app.kubernetes.io/component: backup-schedule
+    backup-type: namespaced
+    target-namespace: gitlab
+spec:
+  schedule: "0 */6 * * *"
+  useOwnerReferencesInBackup: false
+  template:
+    ttl: 168h0m0s
+    includedNamespaces:
+      - gitlab
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: false
+    defaultVolumesToFsBackup: true
+    metadata:
+      labels:
+        backup-type: namespaced
+        target-namespace: gitlab
+---
+# Jenkins Backup Schedule
+# Backs up the jenkins namespace daily at 3:00 AM UTC
+# Retention: 14 days (336 hours)
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: jenkins-backup
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: velero
+    app.kubernetes.io/component: backup-schedule
+    backup-type: namespaced
+    target-namespace: jenkins
+spec:
+  schedule: "0 3 * * *"
+  useOwnerReferencesInBackup: false
+  template:
+    ttl: 336h0m0s
+    includedNamespaces:
+      - jenkins
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: false
+    defaultVolumesToFsBackup: true
+    metadata:
+      labels:
+        backup-type: namespaced
+        target-namespace: jenkins
+---
+# ArgoCD Backup Schedule
+# Backs up the argocd namespace daily at 3:00 AM UTC
+# Retention: 14 days (336 hours)
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: argocd-backup
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: velero
+    app.kubernetes.io/component: backup-schedule
+    backup-type: namespaced
+    target-namespace: argocd
+spec:
+  schedule: "0 3 * * *"
+  useOwnerReferencesInBackup: false
+  template:
+    ttl: 336h0m0s
+    includedNamespaces:
+      - argocd
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: false
+    defaultVolumesToFsBackup: true
+    metadata:
+      labels:
+        backup-type: namespaced
+        target-namespace: argocd
+---
+# Monitoring Backup Schedule
+# Backs up the monitoring namespace daily at 4:00 AM UTC
+# Retention: 7 days (168 hours)
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: monitoring-backup
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: velero
+    app.kubernetes.io/component: backup-schedule
+    backup-type: namespaced
+    target-namespace: monitoring
+spec:
+  schedule: "0 4 * * *"
+  useOwnerReferencesInBackup: false
+  template:
+    ttl: 168h0m0s
+    includedNamespaces:
+      - monitoring
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: false
+    defaultVolumesToFsBackup: true
+    metadata:
+      labels:
+        backup-type: namespaced
+        target-namespace: monitoring

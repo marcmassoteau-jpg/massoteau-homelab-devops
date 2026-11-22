@@ -1,0 +1,92 @@
+# ServiceMonitor for Cluster Autoscaler Prometheus Integration
+# Monitors autoscaler CronJob metrics and events
+#
+# Prerequisite: Prometheus Operator deployed (Phase 7)
+# Apply: kubectl apply -f servicemonitor.yaml
+
+#=============================================================================
+# METRICS SERVICE
+#=============================================================================
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-autoscaler-metrics
+  namespace: autoscaling
+  labels:
+    app.kubernetes.io/name: cluster-autoscaler
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/part-of: devops-platform
+spec:
+  selector:
+    app.kubernetes.io/name: cluster-autoscaler
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+#=============================================================================
+# PROMETHEUS RULES
+#=============================================================================
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-autoscaler-rules
+  namespace: autoscaling
+  labels:
+    app.kubernetes.io/name: cluster-autoscaler
+    app.kubernetes.io/component: monitoring
+    release: prometheus
+spec:
+  groups:
+    - name: cluster-autoscaler.rules
+      rules:
+        # Alert when pending pods exist for more than 10 minutes
+        - alert: PendingPodsScaleUpNeeded
+          expr: |
+            count(kube_pod_status_phase{phase="Pending"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+            component: cluster-autoscaler
+          annotations:
+            summary: "Pending pods detected - scale-up may be needed"
+            description: "{{ $value }} pods have been in Pending state for more than 10 minutes"
+
+        # Alert when node count is at maximum
+        - alert: ClusterAtMaxCapacity
+          expr: |
+            count(kube_node_info) >= 8
+          for: 5m
+          labels:
+            severity: critical
+            component: cluster-autoscaler
+          annotations:
+            summary: "Cluster is at maximum node capacity"
+            description: "The cluster has reached the maximum configured node count (8)"
+
+        # Alert when average CPU utilization is high
+        - alert: HighClusterCPUUtilization
+          expr: |
+            avg(rate(node_cpu_seconds_total{mode!="idle"}[5m])) * 100 > 80
+          for: 10m
+          labels:
+            severity: warning
+            component: cluster-autoscaler
+          annotations:
+            summary: "High cluster CPU utilization"
+            description: "Average cluster CPU utilization is above 80% for 10 minutes"
+
+        # Alert when CronJob is failing
+        - alert: AutoscalerCronJobFailing
+          expr: |
+            kube_cronjob_status_last_schedule_time{namespace="autoscaling"} < (time() - 600)
+          for: 15m
+          labels:
+            severity: warning
+            component: cluster-autoscaler
+          annotations:
+            summary: "Autoscaler CronJob has not run recently"
+            description: "CronJob {{ $labels.cronjob }} has not been scheduled in the last 10 minutes"
